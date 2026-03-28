@@ -1,6 +1,5 @@
 import {
   createBoxId,
-  cloneBoxConfig,
   cloneBoxesConfig,
   getBoxById,
   type BoxConfig,
@@ -10,6 +9,7 @@ import {
   type CameraState,
   type LatLngAltitude,
 } from './cameraUrlState';
+import { getBoxWorldCorners } from './boxMath';
 import { loadGoogleMaps3D } from './googleMapsLoader';
 
 const LOCK_BOUNDS_DELTA = 0.00008;
@@ -19,44 +19,48 @@ const DEFAULT_BOX_SCALE = {
   y: 6,
   z: 4,
 } as const;
-const MODEL_DEFAULT_SRC = './models/box-default.glb';
-const MODEL_EDIT_SRC = './models/box-editing.glb';
 
-type AxisName = 'x' | 'y' | 'z';
-type EditTool = 'move' | 'scale';
+const FACE_INDEXES = [
+  [0, 1, 2, 3],
+  [4, 5, 6, 7],
+  [0, 1, 5, 4],
+  [1, 2, 6, 5],
+  [2, 3, 7, 6],
+  [3, 0, 4, 7],
+] as const;
 
-type Vector3Literal = {
-  x: number;
-  y: number;
-  z: number;
-};
+const EDGE_INDEXES = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 0],
+  [4, 5],
+  [5, 6],
+  [6, 7],
+  [7, 4],
+  [0, 4],
+  [1, 5],
+  [2, 6],
+  [3, 7],
+] as const;
 
-type Orientation3DLiteral = {
-  heading?: number;
-  roll?: number;
-  tilt?: number;
-};
-
-type LocationClickEvent = Event & {
-  position?: LatLngAltitude;
-};
-
-type InteractiveMarkerElement = HTMLElement & {
-  altitudeMode?: string;
-  drawsWhenOccluded?: boolean;
-  extruded?: boolean;
-  label?: string;
-  position?: LatLngAltitude;
-  sizePreserved?: boolean;
+type PolygonFaceElement = HTMLElement & {
+  drawsOccludedSegments?: boolean;
+  fillColor?: string;
+  outerCoordinates?: Iterable<LatLngAltitude>;
+  strokeColor?: string;
+  strokeWidth?: number;
   zIndex?: number;
 };
 
-type InteractiveModelElement = HTMLElement & {
-  altitudeMode?: string;
-  orientation?: Orientation3DLiteral;
-  position?: LatLngAltitude;
-  scale?: Vector3Literal;
-  src?: string;
+type PolylineElement = HTMLElement & {
+  coordinates?: Iterable<LatLngAltitude>;
+  drawsOccludedSegments?: boolean;
+  outerColor?: string;
+  outerWidth?: number;
+  strokeColor?: string;
+  strokeWidth?: number;
+  zIndex?: number;
 };
 
 type Map3DElementInstance = HTMLElement & {
@@ -81,39 +85,43 @@ type Map3DElementInstance = HTMLElement & {
   stopCameraAnimation?: () => Promise<void>;
 };
 
-interface BoxMeta {
-  box: BoxConfig;
-  element: InteractiveModelElement;
-}
+type LocationClickEvent = Event & {
+  position?: LatLngAltitude;
+};
 
-interface DragState {
-  axis: AxisName;
+interface BoxRenderMeta {
   boxId: string;
-  pointerId: number;
-  startX: number;
-  startY: number;
-  tool: EditTool;
+  edges: PolylineElement[];
+  faces: PolygonFaceElement[];
 }
 
 export interface SceneController {
-  clearEditingBox: () => void;
   destroy: () => void;
   getCameraState: () => CameraState;
   getBoxes: () => BoxConfig[];
   setBoxes: (boxes: BoxConfig[]) => void;
   setCameraLocked: (locked: boolean) => void;
   setCameraState: (cameraState: CameraState) => void;
-  setEditTool: (tool: EditTool) => void;
-  setEditingBox: (boxId: string | null) => void;
+  setSelectedBox: (boxId: string | null) => void;
 }
 
 interface InitializeSceneOptions {
   initialBoxes?: BoxConfig[];
   initialCameraState?: CameraState;
-  onCameraStateChange?: (cameraState: CameraState) => void;
+  initialSelectedBoxId?: string | null;
   onBoxesChange?: (boxes: BoxConfig[]) => void;
-  onEditingBoxChange?: (boxId: string | null) => void;
+  onCameraStateChange?: (cameraState: CameraState) => void;
   onHoverBoxChange?: (boxId: string | null) => void;
+  onSelectedBoxChange?: (boxId: string | null) => void;
+}
+
+interface BoxVisualStyle {
+  edgeColor: string;
+  edgeOutline: string;
+  fillColor: string;
+  strokeColor: string;
+  strokeWidth: number;
+  zIndex: number;
 }
 
 function cloneCameraState(cameraState: CameraState): CameraState {
@@ -183,76 +191,61 @@ function applyCameraLock(
   map.maxTilt = undefined;
 }
 
-function modelScaleFromBox(box: BoxConfig): Vector3Literal {
-  return {
-    x: box.scale.x,
-    y: box.scale.z,
-    z: box.scale.y,
-  };
-}
-
-function getHandlePosition(box: BoxConfig, axis: AxisName): LatLngAltitude {
-  if (axis === 'x') {
+function getBoxVisualStyle(
+  boxId: string,
+  selectedBoxId: string | null,
+  hoveredBoxId: string | null,
+): BoxVisualStyle {
+  if (boxId === selectedBoxId) {
     return {
-      altitude: box.position.altitude,
-      lat: box.position.lat,
-      lng: box.position.lng + box.scale.x * 0.0000036,
+      edgeColor: 'rgba(250, 204, 21, 1)',
+      edgeOutline: 'rgba(146, 64, 14, 0.95)',
+      fillColor: 'rgba(250, 204, 21, 0.34)',
+      strokeColor: 'rgba(254, 240, 138, 0.98)',
+      strokeWidth: 3,
+      zIndex: 24,
     };
   }
 
-  if (axis === 'y') {
+  if (!selectedBoxId && boxId === hoveredBoxId) {
     return {
-      altitude: box.position.altitude,
-      lat: box.position.lat + box.scale.y * 0.0000036,
-      lng: box.position.lng,
+      edgeColor: 'rgba(125, 211, 252, 1)',
+      edgeOutline: 'rgba(30, 41, 59, 0.85)',
+      fillColor: 'rgba(125, 211, 252, 0.26)',
+      strokeColor: 'rgba(191, 219, 254, 0.95)',
+      strokeWidth: 2.5,
+      zIndex: 18,
     };
   }
 
   return {
-    altitude: box.position.altitude + box.scale.z * 0.7,
-    lat: box.position.lat,
-    lng: box.position.lng,
+    edgeColor: 'rgba(96, 165, 250, 0.92)',
+    edgeOutline: 'rgba(15, 23, 42, 0.82)',
+    fillColor: 'rgba(37, 99, 235, 0.18)',
+    strokeColor: 'rgba(147, 197, 253, 0.7)',
+    strokeWidth: 2,
+    zIndex: 12,
   };
-}
-
-function projectDrag(
-  axis: AxisName,
-  cameraHeading: number,
-  dx: number,
-  dy: number,
-): number {
-  if (axis === 'z') {
-    return -dy;
-  }
-
-  const axisHeading = axis === 'x' ? 90 : 0;
-  const angle = ((axisHeading - cameraHeading) * Math.PI) / 180;
-  return dx * Math.cos(angle) - dy * Math.sin(angle);
-}
-
-function updateBoxElement(meta: BoxMeta, editingBoxId: string | null): void {
-  meta.element.position = { ...meta.box.position };
-  meta.element.scale = modelScaleFromBox(meta.box);
-  meta.element.src = meta.box.id === editingBoxId ? MODEL_EDIT_SRC : MODEL_DEFAULT_SRC;
 }
 
 export async function initializeGoogleMapsScene(
   container: HTMLElement,
   options: InitializeSceneOptions = {},
 ): Promise<SceneController> {
-  const { Map3DElement, Marker3DInteractiveElement, Model3DInteractiveElement } =
+  const { Map3DElement, Polygon3DInteractiveElement, Polyline3DElement } =
     await loadGoogleMaps3D();
 
   let fixedCameraState = cloneCameraState(
     options.initialCameraState ?? getDefaultCameraState(),
   );
   let boxes = cloneBoxesConfig(options.initialBoxes ?? []);
-  let editTool: EditTool = 'move';
-  let editingBoxId: string | null = null;
+  let selectedBoxId = options.initialSelectedBoxId ?? null;
   let hoveredBoxId: string | null = null;
-  let dragState: DragState | null = null;
   let cameraLocked = false;
   let enforcingCamera = false;
+
+  const altPressedRef = { current: false };
+  const boxElements = new Map<string, BoxRenderMeta>();
 
   const map = new Map3DElement({
     center: fixedCameraState.center,
@@ -265,31 +258,6 @@ export async function initializeGoogleMapsScene(
     tilt: fixedCameraState.tilt,
   }) as Map3DElementInstance;
 
-  const boxElements = new Map<string, BoxMeta>();
-  const axisHandles: Record<AxisName, InteractiveMarkerElement> = {
-    x: new Marker3DInteractiveElement({
-      altitudeMode: 'ABSOLUTE',
-      drawsWhenOccluded: true,
-      label: 'X',
-      sizePreserved: true,
-      zIndex: 999,
-    }) as InteractiveMarkerElement,
-    y: new Marker3DInteractiveElement({
-      altitudeMode: 'ABSOLUTE',
-      drawsWhenOccluded: true,
-      label: 'Y',
-      sizePreserved: true,
-      zIndex: 999,
-    }) as InteractiveMarkerElement,
-    z: new Marker3DInteractiveElement({
-      altitudeMode: 'ABSOLUTE',
-      drawsWhenOccluded: true,
-      label: 'Z',
-      sizePreserved: true,
-      zIndex: 999,
-    }) as InteractiveMarkerElement,
-  };
-
   container.replaceChildren();
   container.append(map);
 
@@ -297,8 +265,31 @@ export async function initializeGoogleMapsScene(
     options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
   };
 
-  const syncBoxes = (): void => {
+  const emitBoxesChange = (): void => {
     options.onBoxesChange?.(cloneBoxesConfig(boxes));
+  };
+
+  const updateBoxStyles = (): void => {
+    for (const meta of boxElements.values()) {
+      const style = getBoxVisualStyle(meta.boxId, selectedBoxId, hoveredBoxId);
+
+      for (const face of meta.faces) {
+        face.drawsOccludedSegments = true;
+        face.fillColor = style.fillColor;
+        face.strokeColor = style.strokeColor;
+        face.strokeWidth = style.strokeWidth;
+        face.zIndex = style.zIndex;
+      }
+
+      for (const edge of meta.edges) {
+        edge.drawsOccludedSegments = true;
+        edge.outerColor = style.edgeOutline;
+        edge.outerWidth = 1;
+        edge.strokeColor = style.edgeColor;
+        edge.strokeWidth = 2;
+        edge.zIndex = style.zIndex + 1;
+      }
+    }
   };
 
   const setHoveredBox = (boxId: string | null): void => {
@@ -308,134 +299,157 @@ export async function initializeGoogleMapsScene(
 
     hoveredBoxId = boxId;
     options.onHoverBoxChange?.(boxId);
+    updateBoxStyles();
   };
 
-  const refreshAxisHandles = (): void => {
-    const editingBox = editingBoxId ? getBoxById(editingBoxId, boxes) : undefined;
-
-    if (!editingBox) {
-      for (const axis of Object.keys(axisHandles) as AxisName[]) {
-        axisHandles[axis].hidden = true;
-      }
+  const setSelectedBoxInternal = (
+    boxId: string | null,
+    emitChange: boolean,
+  ): void => {
+    if (selectedBoxId === boxId) {
       return;
     }
 
-    for (const axis of Object.keys(axisHandles) as AxisName[]) {
-      axisHandles[axis].position = getHandlePosition(editingBox, axis);
-      axisHandles[axis].hidden = false;
+    selectedBoxId = boxId;
+
+    if (emitChange) {
+      options.onSelectedBoxChange?.(boxId);
     }
+
+    updateBoxStyles();
   };
 
-  const renderBoxes = (): void => {
-    if (editingBoxId && !getBoxById(editingBoxId, boxes)) {
-      editingBoxId = null;
-      options.onEditingBoxChange?.(null);
-    }
-
-    for (const meta of boxElements.values()) {
-      meta.element.remove();
-    }
-
-    boxElements.clear();
-
-    for (const box of boxes) {
-      const element = new Model3DInteractiveElement({
-        altitudeMode: 'ABSOLUTE',
-        orientation: {
-          heading: 0,
-          roll: 0,
-          tilt: 0,
-        },
-        position: { ...box.position },
-        scale: modelScaleFromBox(box),
-        src: box.id === editingBoxId ? MODEL_EDIT_SRC : MODEL_DEFAULT_SRC,
-      }) as InteractiveModelElement;
-
-      element.addEventListener('pointerdown', (event) => {
-        if (event.button !== 2) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        editingBoxId = box.id;
-        options.onEditingBoxChange?.(box.id);
-        refreshAxisHandles();
-        renderBoxes();
-      });
-
-      element.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        editingBoxId = box.id;
-        options.onEditingBoxChange?.(box.id);
-        refreshAxisHandles();
-        renderBoxes();
-      });
-
-      element.addEventListener('pointerenter', () => {
-        setHoveredBox(box.id);
-      });
-      element.addEventListener('pointerleave', () => {
-        setHoveredBox(null);
-      });
-
-      boxElements.set(box.id, {
-        box,
-        element,
-      });
-      map.append(element);
-    }
-
-    for (const axis of Object.keys(axisHandles) as AxisName[]) {
-      map.append(axisHandles[axis]);
-    }
-
-    refreshAxisHandles();
-  };
-
-  const setEditingBox = (boxId: string | null): void => {
-    editingBoxId = boxId;
-    options.onEditingBoxChange?.(boxId);
-    renderBoxes();
-  };
-
-  const upsertBox = (nextBox: BoxConfig): void => {
-    boxes = boxes.some((box) => box.id === nextBox.id)
-      ? boxes.map((box) => (box.id === nextBox.id ? cloneBoxConfig(nextBox) : box))
-      : [...boxes, cloneBoxConfig(nextBox)];
-    renderBoxes();
-    syncBoxes();
-  };
-
-  const handleMapClick = (event: Event): void => {
-    const clickEvent = event as LocationClickEvent;
-
-    if (!clickEvent.position) {
-      return;
-    }
-
-    if (!altPressedRef.current) {
-      return;
-    }
-
-    event.preventDefault();
-
+  const createBoxAtPosition = (position: LatLngAltitude): void => {
     const nextBox: BoxConfig = {
       id: createBoxId(),
       position: {
-        altitude: clickEvent.position.altitude + DEFAULT_BOX_SCALE.z / 2,
-        lat: clickEvent.position.lat,
-        lng: clickEvent.position.lng,
+        altitude: position.altitude + DEFAULT_BOX_SCALE.z / 2,
+        lat: position.lat,
+        lng: position.lng,
+      },
+      rotation: {
+        x: 0,
+        y: 0,
+        z: 0,
       },
       scale: { ...DEFAULT_BOX_SCALE },
     };
 
     boxes = [...boxes, nextBox];
-    editingBoxId = nextBox.id;
     renderBoxes();
-    syncBoxes();
-    options.onEditingBoxChange?.(nextBox.id);
+    setSelectedBoxInternal(nextBox.id, true);
+    emitBoxesChange();
+  };
+
+  const handleFaceHoverEnter = (boxId: string) => (): void => {
+    setHoveredBox(boxId);
+  };
+
+  const handleFaceHoverLeave = (boxId: string) => (): void => {
+    if (hoveredBoxId !== boxId) {
+      return;
+    }
+
+    setHoveredBox(null);
+  };
+
+  const handleFaceClick = (boxId: string) => (event: Event): void => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const clickEvent = event as LocationClickEvent;
+
+    if (altPressedRef.current && clickEvent.position) {
+      createBoxAtPosition(clickEvent.position);
+      return;
+    }
+
+    setSelectedBoxInternal(boxId, true);
+  };
+
+  function renderBoxes(): void {
+    if (selectedBoxId && !getBoxById(selectedBoxId, boxes)) {
+      selectedBoxId = null;
+      options.onSelectedBoxChange?.(null);
+    }
+
+    if (hoveredBoxId && !getBoxById(hoveredBoxId, boxes)) {
+      hoveredBoxId = null;
+      options.onHoverBoxChange?.(null);
+    }
+
+    for (const meta of boxElements.values()) {
+      for (const face of meta.faces) {
+        face.remove();
+      }
+
+      for (const edge of meta.edges) {
+        edge.remove();
+      }
+    }
+
+    boxElements.clear();
+
+    for (const box of boxes) {
+      const corners = getBoxWorldCorners(box);
+      const meta: BoxRenderMeta = {
+        boxId: box.id,
+        edges: [],
+        faces: [],
+      };
+
+      for (const [startIndex, endIndex] of EDGE_INDEXES) {
+        const edge = new Polyline3DElement({
+          coordinates: [corners[startIndex], corners[endIndex]],
+          drawsOccludedSegments: true,
+          outerColor: 'rgba(15, 23, 42, 0.82)',
+          outerWidth: 1,
+          strokeColor: 'rgba(96, 165, 250, 0.92)',
+          strokeWidth: 2,
+          zIndex: 13,
+        }) as PolylineElement;
+
+        meta.edges.push(edge);
+        map.append(edge);
+      }
+
+      for (const faceIndexes of FACE_INDEXES) {
+        const face = new Polygon3DInteractiveElement({
+          drawsOccludedSegments: true,
+          fillColor: 'rgba(37, 99, 235, 0.18)',
+          outerCoordinates: faceIndexes.map((index) => corners[index]),
+          strokeColor: 'rgba(147, 197, 253, 0.7)',
+          strokeWidth: 2,
+          zIndex: 12,
+        }) as PolygonFaceElement;
+
+        face.addEventListener('gmp-click', handleFaceClick(box.id));
+        face.addEventListener('mouseenter', handleFaceHoverEnter(box.id));
+        face.addEventListener('mouseleave', handleFaceHoverLeave(box.id));
+        face.addEventListener('pointerenter', handleFaceHoverEnter(box.id));
+        face.addEventListener('pointerleave', handleFaceHoverLeave(box.id));
+
+        meta.faces.push(face);
+        map.append(face);
+      }
+
+      boxElements.set(box.id, meta);
+    }
+
+    updateBoxStyles();
+  }
+
+  const handleMapClick = (event: Event): void => {
+    const clickEvent = event as LocationClickEvent;
+
+    if (altPressedRef.current && clickEvent.position) {
+      event.preventDefault();
+      createBoxAtPosition(clickEvent.position);
+      return;
+    }
+
+    setHoveredBox(null);
+    setSelectedBoxInternal(null, true);
   };
 
   const handleCameraEvent = (): void => {
@@ -471,8 +485,6 @@ export async function initializeGoogleMapsScene(
     }, 0);
   };
 
-  const altPressedRef = { current: false };
-
   const handleKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Alt') {
       altPressedRef.current = true;
@@ -485,101 +497,21 @@ export async function initializeGoogleMapsScene(
     }
   };
 
-  const handlePointerDown = (event: PointerEvent): void => {
-    if (event.button === 2 && (event.target === map || event.target === container)) {
-      event.preventDefault();
-      setEditingBox(null);
+  const handleContainerPointerMove = (event: PointerEvent): void => {
+    if (
+      hoveredBoxId &&
+      (event.target === map || event.target === container) &&
+      !selectedBoxId
+    ) {
+      setHoveredBox(null);
     }
   };
 
-  const handleContextMenu = (event: MouseEvent): void => {
-    if (event.target === map || event.target === container) {
-      event.preventDefault();
-      setEditingBox(null);
+  const handleContainerPointerLeave = (): void => {
+    if (!selectedBoxId) {
+      setHoveredBox(null);
     }
   };
-
-  const handleAxisPointerDown = (axis: AxisName) => (event: PointerEvent): void => {
-    if (!editingBoxId) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    dragState = {
-      axis,
-      boxId: editingBoxId,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      tool: editTool,
-    };
-    container.style.cursor = dragState.tool === 'scale' ? 'ew-resize' : 'grabbing';
-  };
-
-  const handlePointerMove = (event: PointerEvent): void => {
-    if (!dragState || dragState.pointerId !== event.pointerId) {
-      return;
-    }
-
-    const box = getBoxById(dragState.boxId, boxes);
-
-    if (!box) {
-      return;
-    }
-
-    const dx = event.clientX - dragState.startX;
-    const dy = event.clientY - dragState.startY;
-    const cameraRange = map.range ?? fixedCameraState.range;
-    const axisPixels = projectDrag(
-      dragState.axis,
-      map.heading ?? fixedCameraState.heading,
-      dx,
-      dy,
-    );
-    const horizontalDegrees = axisPixels * Math.max(cameraRange * 0.00000001, 0.00000015);
-    const verticalMeters = -dy * Math.max(cameraRange / 220, 0.02);
-    const scaleMeters = axisPixels * Math.max(cameraRange / 450, 0.04);
-    const nextBox = cloneBoxConfig(box);
-
-    if (dragState.tool === 'move') {
-      if (dragState.axis === 'x') {
-        nextBox.position.lng += horizontalDegrees;
-      } else if (dragState.axis === 'y') {
-        nextBox.position.lat += horizontalDegrees;
-      } else {
-        nextBox.position.altitude += verticalMeters;
-      }
-    } else if (dragState.axis === 'x') {
-      nextBox.scale.x = Math.max(0.5, nextBox.scale.x + scaleMeters);
-    } else if (dragState.axis === 'y') {
-      nextBox.scale.y = Math.max(0.5, nextBox.scale.y + scaleMeters);
-    } else {
-      const bottomAltitude = nextBox.position.altitude - nextBox.scale.z / 2;
-      nextBox.scale.z = Math.max(
-        0.5,
-        nextBox.scale.z + verticalMeters,
-      );
-      nextBox.position.altitude = bottomAltitude + nextBox.scale.z / 2;
-    }
-
-    upsertBox(nextBox);
-  };
-
-  const handlePointerUp = (event: PointerEvent): void => {
-    if (!dragState || dragState.pointerId !== event.pointerId) {
-      return;
-    }
-
-    dragState = null;
-    container.style.cursor = '';
-  };
-
-  for (const axis of Object.keys(axisHandles) as AxisName[]) {
-    const handle = axisHandles[axis];
-    handle.hidden = true;
-    handle.addEventListener('pointerdown', handleAxisPointerDown(axis));
-  }
 
   const cameraEvents = [
     'gmp-camerapositionchange',
@@ -595,32 +527,24 @@ export async function initializeGoogleMapsScene(
   }
 
   map.addEventListener('gmp-click', handleMapClick);
-  container.addEventListener('pointerdown', handlePointerDown);
-  container.addEventListener('contextmenu', handleContextMenu);
-  container.addEventListener('pointermove', handlePointerMove);
-  window.addEventListener('pointerup', handlePointerUp);
+  container.addEventListener('pointermove', handleContainerPointerMove);
+  container.addEventListener('pointerleave', handleContainerPointerLeave);
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('keyup', handleKeyUp);
 
   applyCameraLock(map, fixedCameraState, cameraLocked);
   renderBoxes();
   syncCameraState();
-  syncBoxes();
 
   return {
-    clearEditingBox: () => {
-      setEditingBox(null);
-    },
     destroy: () => {
       for (const eventName of cameraEvents) {
         map.removeEventListener(eventName, handleCameraEvent);
       }
 
       map.removeEventListener('gmp-click', handleMapClick);
-      container.removeEventListener('pointerdown', handlePointerDown);
-      container.removeEventListener('contextmenu', handleContextMenu);
-      container.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
+      container.removeEventListener('pointermove', handleContainerPointerMove);
+      container.removeEventListener('pointerleave', handleContainerPointerLeave);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       container.replaceChildren();
@@ -630,7 +554,6 @@ export async function initializeGoogleMapsScene(
     setBoxes: (nextBoxes: BoxConfig[]) => {
       boxes = cloneBoxesConfig(nextBoxes);
       renderBoxes();
-      syncBoxes();
     },
     setCameraLocked: (locked: boolean) => {
       cameraLocked = locked;
@@ -643,11 +566,8 @@ export async function initializeGoogleMapsScene(
       applyCameraLock(map, fixedCameraState, cameraLocked);
       syncCameraState();
     },
-    setEditTool: (tool: EditTool) => {
-      editTool = tool;
-    },
-    setEditingBox: (boxId: string | null) => {
-      setEditingBox(boxId);
+    setSelectedBox: (boxId: string | null) => {
+      setSelectedBoxInternal(boxId, false);
     },
   };
 }

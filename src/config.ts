@@ -21,6 +21,7 @@ export interface BoxConfig {
     lat: number;
     lng: number;
   };
+  rotation: Vector3;
   scale: Vector3;
 }
 
@@ -45,6 +46,9 @@ export function cloneBoxConfig(box: BoxConfig): BoxConfig {
     ...box,
     position: {
       ...box.position,
+    },
+    rotation: {
+      ...box.rotation,
     },
     scale: {
       ...box.scale,

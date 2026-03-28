@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   buildNoCacheReloadUrl,
   buildUrlWithCameraState,
@@ -9,24 +9,61 @@ import {
   type CameraState,
 } from './cameraUrlState';
 import {
+  cloneBoxConfig,
   cloneBoxesConfig,
   getBoxById,
   initialBoxes,
   type BoxConfig,
 } from './config';
 import {
+  clampScaleValue,
+  normalizeDegrees,
+  translatePosition,
+} from './boxMath';
+import {
   initializeGoogleMapsScene,
   type SceneController,
 } from './googleMapsScene';
 
 type SceneStatus = 'loading' | 'ready' | 'error';
-type EditTool = 'move' | 'scale';
+type AxisName = 'x' | 'y' | 'z';
+
+const POSITION_STEP_OPTIONS = [0.25, 1, 5];
+const ROTATION_STEP_OPTIONS = [1, 5, 15];
+const SCALE_STEP_OPTIONS = [0.25, 1, 5];
 
 interface LayoutSnapshot {
   boxes: BoxConfig[];
   cameraState: CameraState;
   exportedAt: string;
-  version: 2;
+  version: 3;
+}
+
+interface AxisControlProps {
+  axis: AxisName;
+  displayValue: string;
+  onDecrement: () => void;
+  onIncrement: () => void;
+}
+
+function AxisControl({
+  axis,
+  displayValue,
+  onDecrement,
+  onIncrement,
+}: AxisControlProps) {
+  return (
+    <div className="axisControl">
+      <span className="axisLabel">{axis.toUpperCase()}</span>
+      <button onClick={onDecrement} type="button">
+        -
+      </button>
+      <code>{displayValue}</code>
+      <button onClick={onIncrement} type="button">
+        +
+      </button>
+    </div>
+  );
 }
 
 function isCameraState(value: unknown): value is CameraState {
@@ -48,30 +85,75 @@ function isCameraState(value: unknown): value is CameraState {
   );
 }
 
-function isBoxConfigArray(value: unknown): value is BoxConfig[] {
-  return (
-    Array.isArray(value) &&
-    value.every((box) => {
-      if (!box || typeof box !== 'object') {
-        return false;
-      }
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
 
-      const candidate = box as Partial<BoxConfig>;
-      return (
-        typeof candidate.id === 'string' &&
-        !!candidate.position &&
-        typeof candidate.position === 'object' &&
-        typeof candidate.position.lat === 'number' &&
-        typeof candidate.position.lng === 'number' &&
-        typeof candidate.position.altitude === 'number' &&
-        !!candidate.scale &&
-        typeof candidate.scale === 'object' &&
-        typeof candidate.scale.x === 'number' &&
-        typeof candidate.scale.y === 'number' &&
-        typeof candidate.scale.z === 'number'
-      );
-    })
-  );
+function parseBoxConfigArray(value: unknown): BoxConfig[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const parsedBoxes: BoxConfig[] = [];
+
+  for (const candidate of value) {
+    if (!isPlainObject(candidate)) {
+      return null;
+    }
+
+    const position = candidate.position;
+    const scale = candidate.scale;
+    const rotation = candidate.rotation;
+
+    if (
+      typeof candidate.id !== 'string' ||
+      !isPlainObject(position) ||
+      typeof position.lat !== 'number' ||
+      typeof position.lng !== 'number' ||
+      typeof position.altitude !== 'number' ||
+      !isPlainObject(scale) ||
+      typeof scale.x !== 'number' ||
+      typeof scale.y !== 'number' ||
+      typeof scale.z !== 'number'
+    ) {
+      return null;
+    }
+
+    parsedBoxes.push({
+      id: candidate.id,
+      position: {
+        altitude: position.altitude,
+        lat: position.lat,
+        lng: position.lng,
+      },
+      rotation:
+        isPlainObject(rotation) &&
+        typeof rotation.x === 'number' &&
+        typeof rotation.y === 'number' &&
+        typeof rotation.z === 'number'
+          ? {
+              x: rotation.x,
+              y: rotation.y,
+              z: rotation.z,
+            }
+          : {
+              x: 0,
+              y: 0,
+              z: 0,
+            },
+      scale: {
+        x: clampScaleValue(scale.x),
+        y: clampScaleValue(scale.y),
+        z: clampScaleValue(scale.z),
+      },
+    });
+  }
+
+  return parsedBoxes;
+}
+
+function formatBoxSummary(box: BoxConfig): string {
+  return `${box.id} | lat ${box.position.lat.toFixed(6)} | lng ${box.position.lng.toFixed(6)} | alt ${box.position.altitude.toFixed(2)}`;
 }
 
 export default function App() {
@@ -83,11 +165,13 @@ export default function App() {
   const [defaultCameraState, setDefaultCameraState] =
     useState<CameraState>(startupCameraState);
   const [boxes, setBoxes] = useState<BoxConfig[]>(() => cloneBoxesConfig(initialBoxes));
-  const [editingBoxId, setEditingBoxId] = useState<string | null>(null);
+  const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
-  const [editTool, setEditTool] = useState<EditTool>('move');
   const [cameraLocked, setCameraLocked] = useState(false);
   const [noCache, setNoCache] = useState(startupNoCache);
+  const [positionStep, setPositionStep] = useState(1);
+  const [rotationStep, setRotationStep] = useState(5);
+  const [scaleStep, setScaleStep] = useState(1);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [interactionHint, setInteractionHint] = useState('');
@@ -100,11 +184,10 @@ export default function App() {
   const cameraStateRef = useRef(defaultCameraState);
   const boxesRef = useRef(boxes);
   const noCacheRef = useRef(noCache);
-  const editToolRef = useRef<EditTool>(editTool);
   const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
 
-  const editingBox = editingBoxId ? getBoxById(editingBoxId, boxes) : undefined;
+  const selectedBox = selectedBoxId ? getBoxById(selectedBoxId, boxes) : undefined;
   const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
 
   const syncUrl = (
@@ -150,6 +233,7 @@ export default function App() {
         controller = await initializeGoogleMapsScene(container, {
           initialBoxes: boxesRef.current,
           initialCameraState: defaultCameraState,
+          initialSelectedBoxId: selectedBoxId,
           onBoxesChange: (nextBoxes) => {
             boxesRef.current = nextBoxes;
             setBoxes(nextBoxes);
@@ -166,11 +250,11 @@ export default function App() {
               cameraUrlFrameRef.current = null;
             });
           },
-          onEditingBoxChange: (boxId) => {
-            setEditingBoxId(boxId);
-          },
           onHoverBoxChange: (boxId) => {
             setHoveredBoxId(boxId);
+          },
+          onSelectedBoxChange: (boxId) => {
+            setSelectedBoxId(boxId);
           },
         });
 
@@ -180,8 +264,9 @@ export default function App() {
         }
 
         sceneRef.current = controller;
-        controller.setEditTool(editToolRef.current);
         controller.setCameraLocked(cameraLocked);
+        controller.setBoxes(boxesRef.current);
+        controller.setSelectedBox(selectedBoxId);
         setSceneStatus('ready');
       } catch (error) {
         if (!active) {
@@ -211,7 +296,12 @@ export default function App() {
 
   useEffect(() => {
     boxesRef.current = boxes;
+    sceneRef.current?.setBoxes(boxes);
   }, [boxes]);
+
+  useEffect(() => {
+    sceneRef.current?.setSelectedBox(selectedBoxId);
+  }, [selectedBoxId]);
 
   useEffect(() => {
     noCacheRef.current = noCache;
@@ -219,17 +309,12 @@ export default function App() {
   }, [noCache]);
 
   useEffect(() => {
-    editToolRef.current = editTool;
-    sceneRef.current?.setEditTool(editTool);
-  }, [editTool]);
-
-  useEffect(() => {
     sceneRef.current?.setCameraLocked(cameraLocked);
   }, [cameraLocked]);
 
   useEffect(() => {
-    sceneRef.current?.setEditingBox(editingBoxId);
-  }, [editingBoxId]);
+    sceneRef.current?.setCameraState(defaultCameraState);
+  }, [defaultCameraState]);
 
   const showHint = (message: string): void => {
     setInteractionHint(message);
@@ -244,12 +329,81 @@ export default function App() {
     }, 1800);
   };
 
+  const updateSelectedBox = (updater: (box: BoxConfig) => BoxConfig): void => {
+    if (!selectedBoxId) {
+      return;
+    }
+
+    setBoxes((currentBoxes) =>
+      currentBoxes.map((box) =>
+        box.id === selectedBoxId ? updater(cloneBoxConfig(box)) : box,
+      ),
+    );
+  };
+
+  const adjustSelectedPosition = (
+    axis: AxisName,
+    direction: -1 | 1,
+  ): void => {
+    const delta = positionStep * direction;
+
+    updateSelectedBox((box) => {
+      if (axis === 'x') {
+        box.position = translatePosition(box.position, delta, 0, 0);
+      } else if (axis === 'y') {
+        box.position = translatePosition(box.position, 0, delta, 0);
+      } else {
+        box.position = translatePosition(box.position, 0, 0, delta);
+      }
+
+      return box;
+    });
+  };
+
+  const adjustSelectedRotation = (
+    axis: AxisName,
+    direction: -1 | 1,
+  ): void => {
+    updateSelectedBox((box) => {
+      box.rotation = {
+        ...box.rotation,
+        [axis]: normalizeDegrees(box.rotation[axis] + rotationStep * direction),
+      };
+      return box;
+    });
+  };
+
+  const adjustSelectedScale = (
+    axis: AxisName,
+    direction: -1 | 1,
+  ): void => {
+    updateSelectedBox((box) => {
+      box.scale = {
+        ...box.scale,
+        [axis]: clampScaleValue(box.scale[axis] + scaleStep * direction),
+      };
+      return box;
+    });
+  };
+
+  const handleDeleteSelectedBox = (): void => {
+    if (!selectedBoxId) {
+      return;
+    }
+
+    setBoxes((currentBoxes) =>
+      currentBoxes.filter((box) => box.id !== selectedBoxId),
+    );
+    setSelectedBoxId(null);
+    setHoveredBoxId(null);
+  };
+
   const handleExportLayout = (): void => {
     const snapshot: LayoutSnapshot = {
       boxes: sceneRef.current?.getBoxes() ?? cloneBoxesConfig(boxes),
       cameraState: sceneRef.current?.getCameraState() ?? cameraStateRef.current,
       exportedAt: new Date().toISOString(),
-      version: 2,
+      version: 3,
     };
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
       type: 'application/json',
@@ -264,7 +418,7 @@ export default function App() {
   };
 
   const handleImportLayout = async (
-    event: React.ChangeEvent<HTMLInputElement>,
+    event: ChangeEvent<HTMLInputElement>,
   ): Promise<void> => {
     const file = event.target.files?.[0];
 
@@ -274,14 +428,15 @@ export default function App() {
 
     try {
       const parsed = JSON.parse(await file.text()) as Partial<LayoutSnapshot>;
+      const nextBoxes = parseBoxConfigArray(parsed.boxes);
 
-      if (!isBoxConfigArray(parsed.boxes)) {
+      if (!nextBoxes) {
         throw new Error('Arquivo sem lista válida de caixas.');
       }
 
-      const nextBoxes = cloneBoxesConfig(parsed.boxes);
-      setBoxes(nextBoxes);
-      sceneRef.current?.setBoxes(nextBoxes);
+      setBoxes(cloneBoxesConfig(nextBoxes));
+      setSelectedBoxId(null);
+      setHoveredBoxId(null);
 
       if (isCameraState(parsed.cameraState)) {
         setDefaultCameraState(parsed.cameraState);
@@ -290,7 +445,6 @@ export default function App() {
         syncUrl(parsed.cameraState, noCacheRef.current);
       }
 
-      setEditingBoxId(null);
       setSceneStatus('ready');
       setErrorMessage('');
     } catch (error) {
@@ -308,10 +462,10 @@ export default function App() {
       <aside className="panel">
         <h1>PUC-Rio 3D Overlay</h1>
         <p className="muted">
-          Editor de caixas 3D sobre o Google Maps. Use <strong>Alt + clique
-          esquerdo</strong> para inserir uma caixa. Use <strong>clique
-          direito</strong> numa caixa para entrar em edição e clique direito em
-          vazio para sair.
+          Use <strong>Alt + clique esquerdo</strong> para inserir uma caixa na
+          posição do mouse. Use <strong>clique esquerdo</strong> para selecionar
+          uma caixa. Passe o mouse por cima de uma caixa sem seleção ativa para
+          ver os dados dela.
         </p>
 
         <div className="section">
@@ -351,14 +505,11 @@ export default function App() {
             Recarregar
           </button>
           <button
-            disabled={!editingBoxId}
-            onClick={() => {
-              setEditingBoxId(null);
-              sceneRef.current?.clearEditingBox();
-            }}
+            disabled={!selectedBox}
+            onClick={handleDeleteSelectedBox}
             type="button"
           >
-            Sair da edição
+            Remover caixa selecionada
           </button>
         </div>
 
@@ -373,58 +524,182 @@ export default function App() {
         />
 
         <div className="section">
-          <label htmlFor="boxSelect">Caixa</label>
-          <select
-            id="boxSelect"
-            onChange={(event) =>
-              setEditingBoxId(event.target.value ? event.target.value : null)
-            }
-            value={editingBoxId ?? ''}
-          >
-            <option value="">Nenhuma</option>
-            {boxes.map((box) => (
-              <option key={box.id} value={box.id}>
-                {box.id}
-              </option>
-            ))}
-          </select>
+          <label htmlFor="boxSelect">Caixa selecionada</label>
+          <div className="inlineActions">
+            <select
+              id="boxSelect"
+              onChange={(event) =>
+                setSelectedBoxId(event.target.value ? event.target.value : null)
+              }
+              value={selectedBoxId ?? ''}
+            >
+              <option value="">Nenhuma</option>
+              {boxes.map((box) => (
+                <option key={box.id} value={box.id}>
+                  {box.id}
+                </option>
+              ))}
+            </select>
+            <button
+              disabled={!selectedBoxId}
+              onClick={() => setSelectedBoxId(null)}
+              type="button"
+            >
+              Limpar
+            </button>
+          </div>
         </div>
 
         <div className="section">
-          <label htmlFor="toolSelect">Ferramenta da edição</label>
-          <select
-            disabled={!editingBoxId}
-            id="toolSelect"
-            onChange={(event) => setEditTool(event.target.value as EditTool)}
-            value={editTool}
-          >
-            <option value="move">Mover</option>
-            <option value="scale">Escala</option>
-          </select>
+          <p className="sectionTitle">Passos do editor</p>
+          <div className="stepSelectorGrid">
+            <label>
+              Posição
+              <select
+                onChange={(event) => setPositionStep(Number(event.target.value))}
+                value={String(positionStep)}
+              >
+                {POSITION_STEP_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option} m
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Rotação
+              <select
+                onChange={(event) => setRotationStep(Number(event.target.value))}
+                value={String(rotationStep)}
+              >
+                {ROTATION_STEP_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option} deg
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Escala
+              <select
+                onChange={(event) => setScaleStep(Number(event.target.value))}
+                value={String(scaleStep)}
+              >
+                {SCALE_STEP_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option} m
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
-        <div className="section legend">
-          <div>
-            <span className="dot selected" />
-            Caixa em edição
+        {selectedBox ? (
+          <div className="section">
+            <p className="sectionTitle">Editar {selectedBox.id}</p>
+            <p className="small">
+              Eixos de posição: <code>X</code> leste/oeste, <code>Y</code>{' '}
+              norte/sul, <code>Z</code> altitude. Os botões usam o passo em
+              metros; a leitura abaixo continua geográfica.
+            </p>
+
+            <div className="editorGroup">
+              <p className="groupLabel">Posição</p>
+              <AxisControl
+                axis="x"
+                displayValue={`${selectedBox.position.lng.toFixed(7)} lng`}
+                onDecrement={() => adjustSelectedPosition('x', -1)}
+                onIncrement={() => adjustSelectedPosition('x', 1)}
+              />
+              <AxisControl
+                axis="y"
+                displayValue={`${selectedBox.position.lat.toFixed(7)} lat`}
+                onDecrement={() => adjustSelectedPosition('y', -1)}
+                onIncrement={() => adjustSelectedPosition('y', 1)}
+              />
+              <AxisControl
+                axis="z"
+                displayValue={`${selectedBox.position.altitude.toFixed(2)} m`}
+                onDecrement={() => adjustSelectedPosition('z', -1)}
+                onIncrement={() => adjustSelectedPosition('z', 1)}
+              />
+            </div>
+
+            <div className="editorGroup">
+              <p className="groupLabel">Rotação</p>
+              <AxisControl
+                axis="x"
+                displayValue={`${selectedBox.rotation.x.toFixed(2)} deg`}
+                onDecrement={() => adjustSelectedRotation('x', -1)}
+                onIncrement={() => adjustSelectedRotation('x', 1)}
+              />
+              <AxisControl
+                axis="y"
+                displayValue={`${selectedBox.rotation.y.toFixed(2)} deg`}
+                onDecrement={() => adjustSelectedRotation('y', -1)}
+                onIncrement={() => adjustSelectedRotation('y', 1)}
+              />
+              <AxisControl
+                axis="z"
+                displayValue={`${selectedBox.rotation.z.toFixed(2)} deg`}
+                onDecrement={() => adjustSelectedRotation('z', -1)}
+                onIncrement={() => adjustSelectedRotation('z', 1)}
+              />
+            </div>
+
+            <div className="editorGroup">
+              <p className="groupLabel">Escala</p>
+              <AxisControl
+                axis="x"
+                displayValue={`${selectedBox.scale.x.toFixed(2)} m`}
+                onDecrement={() => adjustSelectedScale('x', -1)}
+                onIncrement={() => adjustSelectedScale('x', 1)}
+              />
+              <AxisControl
+                axis="y"
+                displayValue={`${selectedBox.scale.y.toFixed(2)} m`}
+                onDecrement={() => adjustSelectedScale('y', -1)}
+                onIncrement={() => adjustSelectedScale('y', 1)}
+              />
+              <AxisControl
+                axis="z"
+                displayValue={`${selectedBox.scale.z.toFixed(2)} m`}
+                onDecrement={() => adjustSelectedScale('z', -1)}
+                onIncrement={() => adjustSelectedScale('z', 1)}
+              />
+            </div>
+
+            <div className="metricList small">
+              <p>
+                Lat: {selectedBox.position.lat.toFixed(7)}
+                <br />
+                Lng: {selectedBox.position.lng.toFixed(7)}
+                <br />
+                Alt: {selectedBox.position.altitude.toFixed(2)}
+              </p>
+            </div>
           </div>
-          <div>
-            <span className="dot hover" />
-            Hover da caixa
+        ) : hoveredBox ? (
+          <div className="section roomState">
+            <p className="sectionTitle">Hover</p>
+            <p>{formatBoxSummary(hoveredBox)}</p>
+            <p>
+              Rotação: {hoveredBox.rotation.x.toFixed(1)} /{' '}
+              {hoveredBox.rotation.y.toFixed(1)} /{' '}
+              {hoveredBox.rotation.z.toFixed(1)}
+              <br />
+              Escala: {hoveredBox.scale.x.toFixed(2)} x{' '}
+              {hoveredBox.scale.y.toFixed(2)} x{' '}
+              {hoveredBox.scale.z.toFixed(2)}
+            </p>
           </div>
-          <div>
-            <span className="dot axis-x" />
-            Handle X
+        ) : (
+          <div className="section roomState">
+            <p className="sectionTitle">Editor</p>
+            <p>Selecione uma caixa para editar ou passe o mouse por uma caixa para inspecionar.</p>
           </div>
-          <div>
-            <span className="dot axis-y" />
-            Handle Y
-          </div>
-          <div>
-            <span className="dot axis-z" />
-            Handle Z
-          </div>
-        </div>
+        )}
 
         <div className="section small">
           <p>
@@ -465,19 +740,17 @@ export default function App() {
           <p>
             <strong>Caixas</strong>
             <br />
-            {boxes.length} caixa(s) inserida(s)
+            {boxes.length} caixa(s)
+          </p>
+          <p>
+            <strong>Selecionada</strong>
+            <br />
+            {selectedBox ? selectedBox.id : 'Nenhuma'}
           </p>
           <p>
             <strong>Hover</strong>
             <br />
             {hoveredBox ? hoveredBox.id : 'Nenhuma'}
-          </p>
-          <p>
-            <strong>Edição</strong>
-            <br />
-            {editingBox
-              ? `${editingBox.id} | pos ${editingBox.position.lat.toFixed(6)}, ${editingBox.position.lng.toFixed(6)}, ${editingBox.position.altitude.toFixed(2)} | escala ${editingBox.scale.x.toFixed(2)} x ${editingBox.scale.y.toFixed(2)} x ${editingBox.scale.z.toFixed(2)}`
-              : 'Clique direito em uma caixa para editar.'}
           </p>
         </div>
 

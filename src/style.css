@@ -70,6 +70,7 @@ body {
 }
 
 label,
+.axisLabel,
 .small,
 select,
 textarea,
@@ -80,7 +81,8 @@ code {
 
 select,
 textarea,
-button {
+button,
+input {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
@@ -91,6 +93,11 @@ button {
 
 button {
   cursor: pointer;
+}
+
+input[type="checkbox"] {
+  width: auto;
+  padding: 0;
 }
 
 button:disabled {
@@ -111,6 +118,72 @@ textarea {
 .actionGrid {
   display: grid;
   gap: 10px;
+}
+
+.inlineActions {
+  display: grid;
+  gap: 8px;
+}
+
+.stepSelectorGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.stepSelectorGrid label {
+  display: grid;
+  gap: 8px;
+}
+
+.editorGroup {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.editorGroup:first-of-type {
+  margin-top: 10px;
+}
+
+.groupLabel,
+.sectionTitle {
+  margin: 0;
+  font-weight: 600;
+}
+
+.axisControl {
+  display: grid;
+  grid-template-columns: 40px 52px 1fr 52px;
+  gap: 8px;
+  align-items: center;
+}
+
+.axisControl code {
+  display: block;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axisControl button {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.axisLabel {
+  text-align: center;
+  color: #e2e8f0;
+}
+
+.metricList p,
+.groupLabel {
+  margin-bottom: 0;
 }
 
 .legend {
@@ -157,7 +230,8 @@ textarea {
 }
 
 .roomState p:last-child,
-.section p:last-child {
+.section p:last-child,
+.metricList p:last-child {
   margin-bottom: 0;
 }
 
@@ -213,5 +287,9 @@ textarea {
   .panel {
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .axisControl {
+    grid-template-columns: 34px 46px 1fr 46px;
   }
 }

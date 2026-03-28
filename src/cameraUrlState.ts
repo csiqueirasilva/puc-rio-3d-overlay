@@ -24,10 +24,10 @@ const cameraParamKeys = {
   tilt: 'camTilt',
 } as const;
 
-function readNumber(
-  searchParams: URLSearchParams,
-  key: string,
-): number | null {
+export const noCacheParamKey = 'noCache';
+export const cacheBustParamKey = '_ts';
+
+function readNumber(searchParams: URLSearchParams, key: string): number | null {
   const value = searchParams.get(key);
 
   if (value === null) {
@@ -40,6 +40,10 @@ function readNumber(
 
 function formatNumber(value: number, fractionDigits: number): string {
   return value.toFixed(fractionDigits);
+}
+
+function getUrl(currentHref: string = window.location.href): URL {
+  return new URL(currentHref, window.location.origin);
 }
 
 export function getDefaultCameraState(): CameraState {
@@ -59,7 +63,7 @@ export function getDefaultCameraState(): CameraState {
 export function parseCameraStateFromUrl(
   currentHref: string = window.location.href,
 ): CameraState | null {
-  const url = new URL(currentHref, window.location.origin);
+  const url = getUrl(currentHref);
   const lat = readNumber(url.searchParams, cameraParamKeys.lat);
   const lng = readNumber(url.searchParams, cameraParamKeys.lng);
   const altitude = readNumber(url.searchParams, cameraParamKeys.altitude);
@@ -93,11 +97,17 @@ export function parseCameraStateFromUrl(
   };
 }
 
+export function parseNoCacheFromUrl(
+  currentHref: string = window.location.href,
+): boolean {
+  return getUrl(currentHref).searchParams.get(noCacheParamKey) === '1';
+}
+
 export function buildUrlWithCameraState(
   cameraState: CameraState,
   currentHref: string = window.location.href,
 ): string {
-  const url = new URL(currentHref, window.location.origin);
+  const url = getUrl(currentHref);
 
   url.searchParams.set(
     cameraParamKeys.lat,
@@ -121,6 +131,35 @@ export function buildUrlWithCameraState(
     formatNumber(cameraState.range, 2),
   );
   url.searchParams.set(cameraParamKeys.fov, formatNumber(cameraState.fov, 2));
+
+  return url.toString();
+}
+
+export function buildUrlWithNoCache(
+  enabled: boolean,
+  currentHref: string = window.location.href,
+): string {
+  const url = getUrl(currentHref);
+
+  if (enabled) {
+    url.searchParams.set(noCacheParamKey, '1');
+  } else {
+    url.searchParams.delete(noCacheParamKey);
+    url.searchParams.delete(cacheBustParamKey);
+  }
+
+  return url.toString();
+}
+
+export function buildNoCacheReloadUrl(
+  enabled: boolean,
+  currentHref: string = window.location.href,
+): string {
+  const url = new URL(buildUrlWithNoCache(enabled, currentHref));
+
+  if (enabled) {
+    url.searchParams.set(cacheBustParamKey, String(Date.now()));
+  }
 
   return url.toString();
 }

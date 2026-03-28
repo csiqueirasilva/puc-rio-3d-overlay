@@ -51,13 +51,13 @@ const statusLabels: Record<RoomStatus, string> = {
 };
 
 export const initialView: InitialView = {
-  lat: -22.9779118,
-  lon: -43.231122,
-  centerAltitude: 20,
+  lat: -22.9789793,
+  lon: -43.2320437,
+  centerAltitude: 46.19,
   fov: 35,
-  heading: 217.91,
-  range: 92,
-  tilt: 68.25,
+  heading: -135.91,
+  range: 118.62,
+  tilt: 72.07,
 };
 
 export const buildings: BuildingConfig[] = [
@@ -84,6 +84,22 @@ export const buildings: BuildingConfig[] = [
   },
 ];
 
+export function cloneBuildingConfig(building: BuildingConfig): BuildingConfig {
+  return {
+    ...building,
+    grid: {
+      ...building.grid,
+    },
+    statusPattern: [...building.statusPattern],
+  };
+}
+
+export function cloneBuildingsConfig(
+  sourceBuildings: BuildingConfig[] = buildings,
+): BuildingConfig[] {
+  return sourceBuildings.map(cloneBuildingConfig);
+}
+
 export function patternStatus(index: number, pattern: RoomStatus[]): RoomStatus {
   return pattern[index % pattern.length] ?? 'free';
 }
@@ -101,12 +117,18 @@ export function getBuildingIdFromRoomId(roomId: string): string {
   return roomId.split('::')[0] ?? '';
 }
 
-export function getBuildingById(buildingId: string): BuildingConfig | undefined {
-  return buildings.find((building) => building.id === buildingId);
+export function getBuildingById(
+  buildingId: string,
+  sourceBuildings: BuildingConfig[] = buildings,
+): BuildingConfig | undefined {
+  return sourceBuildings.find((building) => building.id === buildingId);
 }
 
-export function getRoomsForBuilding(buildingId: string): RoomOption[] {
-  const building = getBuildingById(buildingId);
+export function getRoomsForBuilding(
+  buildingId: string,
+  sourceBuildings: BuildingConfig[] = buildings,
+): RoomOption[] {
+  const building = getBuildingById(buildingId, sourceBuildings);
 
   if (!building) {
     return [];
@@ -138,7 +160,12 @@ export function getRoomsForBuilding(buildingId: string): RoomOption[] {
   return rooms;
 }
 
-export function getRoomById(roomId: string): RoomOption | undefined {
+export function getRoomById(
+  roomId: string,
+  sourceBuildings: BuildingConfig[] = buildings,
+): RoomOption | undefined {
   const buildingId = getBuildingIdFromRoomId(roomId);
-  return getRoomsForBuilding(buildingId).find((room) => room.id === roomId);
+  return getRoomsForBuilding(buildingId, sourceBuildings).find(
+    (room) => room.id === roomId,
+  );
 }

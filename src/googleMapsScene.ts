@@ -1,6 +1,9 @@
 import {
   buildEntityId,
   buildings,
+  cloneBuildingConfig,
+  cloneBuildingsConfig,
+  getBuildingIdFromRoomId,
   patternStatus,
   type BuildingConfig,
   type RoomStatus,
@@ -41,13 +44,41 @@ const selectedPalette = {
   stroke: 'rgba(255, 255, 255, 1)',
 };
 
+const gizmoPalette = {
+  x: {
+    outer: 'rgba(248, 113, 113, 1)',
+    stroke: 'rgba(239, 68, 68, 1)',
+  },
+  y: {
+    outer: 'rgba(74, 222, 128, 1)',
+    stroke: 'rgba(34, 197, 94, 1)',
+  },
+  z: {
+    outer: 'rgba(96, 165, 250, 1)',
+    stroke: 'rgba(59, 130, 246, 1)',
+  },
+};
+
+type AxisName = 'x' | 'y' | 'z';
+
 type InteractivePolygonElement = HTMLElement & {
   altitudeMode?: string;
-  drawOccludedSegments?: boolean;
   drawsOccludedSegments?: boolean;
   fillColor?: string;
   geodesic?: boolean;
   outerCoordinates?: LatLngAltitude[];
+  strokeColor?: string;
+  strokeWidth?: number;
+  zIndex?: number;
+};
+
+type InteractivePolylineElement = HTMLElement & {
+  altitudeMode?: string;
+  coordinates?: LatLngAltitude[];
+  drawsOccludedSegments?: boolean;
+  geodesic?: boolean;
+  outerColor?: string;
+  outerWidth?: number;
   strokeColor?: string;
   strokeWidth?: number;
   zIndex?: number;
@@ -65,10 +96,8 @@ type Map3DElementInstance = HTMLElement & {
   fov?: number;
   gestureHandling?: string;
   heading?: number;
-  maxAltitude?: number;
   maxHeading?: number;
   maxTilt?: number;
-  minAltitude?: number;
   minHeading?: number;
   minTilt?: number;
   mode?: string;
@@ -81,19 +110,37 @@ interface RoomMeta {
   baseFill: string;
   baseStroke: string;
   buildingId: string;
+  col: number;
+  floor: number;
   id: string;
   polygon: InteractivePolygonElement;
+  row: number;
   status: RoomStatus;
+}
+
+interface DragState {
+  axis: AxisName;
+  buildingId: string;
+  initialBuilding: BuildingConfig;
+  pointerId: number;
+  startX: number;
+  startY: number;
 }
 
 export interface SceneController {
   destroy: () => void;
+  getBuildingConfigs: () => BuildingConfig[];
+  getCameraState: () => CameraState;
+  setBuildingConfigs: (nextBuildings: BuildingConfig[]) => void;
   setCameraLocked: (locked: boolean) => void;
+  setCameraState: (cameraState: CameraState) => void;
   setRoomsVisible: (visible: boolean) => void;
+  setSelectedBuilding: (buildingId: string) => void;
   setSelectedRoom: (roomId: string) => void;
 }
 
 interface InitializeSceneOptions {
+  initialBuildings?: BuildingConfig[];
   initialCameraState?: CameraState;
   onCameraStateChange?: (cameraState: CameraState) => void;
   onRoomHovered?: (roomId: string | null) => void;
@@ -102,6 +149,18 @@ interface InitializeSceneOptions {
 
 function degreesToRadians(value: number): number {
   return (value * Math.PI) / 180;
+}
+
+function cloneCameraState(cameraState: CameraState): CameraState {
+  return {
+    center: {
+      ...cameraState.center,
+    },
+    fov: cameraState.fov,
+    heading: cameraState.heading,
+    range: cameraState.range,
+    tilt: cameraState.tilt,
+  };
 }
 
 function translateLatLng(
@@ -135,7 +194,10 @@ function rotateLocalOffset(
   };
 }
 
-function applyCameraState(map: Map3DElementInstance, cameraState: CameraState): void {
+function applyCameraState(
+  map: Map3DElementInstance,
+  cameraState: CameraState,
+): void {
   map.center = { ...cameraState.center };
   map.fov = cameraState.fov;
   map.heading = cameraState.heading;
@@ -149,8 +211,7 @@ function readCameraState(
 ): CameraState {
   return {
     center: {
-      altitude:
-        map.center?.altitude ?? fallbackCameraState.center.altitude,
+      altitude: map.center?.altitude ?? fallbackCameraState.center.altitude,
       lat: map.center?.lat ?? fallbackCameraState.center.lat,
       lng: map.center?.lng ?? fallbackCameraState.center.lng,
     },
@@ -212,7 +273,12 @@ function buildRoomPolygonCoordinates(
 
   return corners.map(({ x, y }) => {
     const { east, north } = rotateLocalOffset(x, y, building.headingDeg);
-    const { lat, lng } = translateLatLng(building.lat, building.lon, east, north);
+    const { lat, lng } = translateLatLng(
+      building.lat,
+      building.lon,
+      east,
+      north,
+    );
 
     return {
       altitude,
@@ -220,6 +286,61 @@ function buildRoomPolygonCoordinates(
       lng,
     };
   });
+}
+
+function getBuildingCenter(building: BuildingConfig): LatLngAltitude {
+  const offsetX = building.grid.offsetX ?? 0;
+  const offsetY = building.grid.offsetY ?? 0;
+  const offsetZ = building.grid.offsetZ ?? 0;
+  const { east, north } = rotateLocalOffset(offsetX, offsetY, building.headingDeg);
+  const { lat, lng } = translateLatLng(building.lat, building.lon, east, north);
+
+  return {
+    altitude: building.baseHeight + offsetZ + (building.grid.floors * building.grid.cellZ) / 2,
+    lat,
+    lng,
+  };
+}
+
+function getGizmoAxisCoordinates(
+  building: BuildingConfig,
+  axis: AxisName,
+): LatLngAltitude[] {
+  const center = getBuildingCenter(building);
+  const { cols, rows, floors, cellX, cellY, cellZ } = building.grid;
+  const localLengthX = Math.max(cols * cellX * 0.6, 12);
+  const localLengthY = Math.max(rows * cellY * 0.9, 12);
+  const localLengthZ = Math.max(floors * cellZ * 0.8, 12);
+
+  if (axis === 'z') {
+    return [
+      center,
+      {
+        ...center,
+        altitude: center.altitude + localLengthZ,
+      },
+    ];
+  }
+
+  const localEnd =
+    axis === 'x'
+      ? { x: (building.grid.offsetX ?? 0) + localLengthX, y: building.grid.offsetY ?? 0 }
+      : { x: building.grid.offsetX ?? 0, y: (building.grid.offsetY ?? 0) + localLengthY };
+  const { east, north } = rotateLocalOffset(
+    localEnd.x,
+    localEnd.y,
+    building.headingDeg,
+  );
+  const { lat, lng } = translateLatLng(building.lat, building.lon, east, north);
+
+  return [
+    center,
+    {
+      altitude: center.altitude,
+      lat,
+      lng,
+    },
+  ];
 }
 
 function resolveRoomColors(
@@ -251,13 +372,42 @@ function setRoomAppearance(
   room.polygon.strokeColor = colors.stroke;
 }
 
+function projectDragToAxis(
+  axis: AxisName,
+  dragState: DragState,
+  currentBuilding: BuildingConfig,
+  cameraHeading: number,
+  dx: number,
+  dy: number,
+): number {
+  if (axis === 'z') {
+    return -dy;
+  }
+
+  const axisHeading =
+    axis === 'x'
+      ? currentBuilding.headingDeg
+      : currentBuilding.headingDeg + 90;
+  const relativeAngle = degreesToRadians(axisHeading - cameraHeading);
+
+  return dx * Math.cos(relativeAngle) - dy * Math.sin(relativeAngle);
+}
+
 export async function initializeGoogleMapsScene(
   container: HTMLElement,
   options: InitializeSceneOptions = {},
 ): Promise<SceneController> {
-  const { Map3DElement, Polygon3DInteractiveElement } =
-    await loadGoogleMaps3D();
-  const fixedCameraState = options.initialCameraState ?? getDefaultCameraState();
+  const {
+    Map3DElement,
+    Polygon3DInteractiveElement,
+    Polyline3DInteractiveElement,
+  } = await loadGoogleMaps3D();
+  let fixedCameraState = cloneCameraState(
+    options.initialCameraState ?? getDefaultCameraState(),
+  );
+  let currentBuildings = cloneBuildingsConfig(
+    options.initialBuildings ?? buildings,
+  );
   const map = new Map3DElement({
     center: fixedCameraState.center,
     defaultUIHidden: true,
@@ -272,12 +422,65 @@ export async function initializeGoogleMapsScene(
   container.replaceChildren();
   container.append(map);
 
-  const roomMap = new Map<string, RoomMeta>();
+  let roomMap = new Map<string, RoomMeta>();
+  let roomElements: InteractivePolygonElement[] = [];
   let roomsVisible = true;
   let cameraLocked = true;
   let hoveredRoomId: string | null = null;
+  let selectedBuildingId: string | null = currentBuildings[0]?.id ?? null;
   let selectedRoomId: string | null = null;
   let enforcingCamera = false;
+  let dragState: DragState | null = null;
+
+  const gizmoAxes: Record<AxisName, InteractivePolylineElement> = {
+    x: new Polyline3DInteractiveElement({
+      altitudeMode: 'ABSOLUTE',
+      coordinates: [],
+      drawsOccludedSegments: true,
+      geodesic: false,
+      outerColor: gizmoPalette.x.outer,
+      outerWidth: 4,
+      strokeColor: gizmoPalette.x.stroke,
+      strokeWidth: 2.2,
+      zIndex: 999,
+    }) as InteractivePolylineElement,
+    y: new Polyline3DInteractiveElement({
+      altitudeMode: 'ABSOLUTE',
+      coordinates: [],
+      drawsOccludedSegments: true,
+      geodesic: false,
+      outerColor: gizmoPalette.y.outer,
+      outerWidth: 4,
+      strokeColor: gizmoPalette.y.stroke,
+      strokeWidth: 2.2,
+      zIndex: 999,
+    }) as InteractivePolylineElement,
+    z: new Polyline3DInteractiveElement({
+      altitudeMode: 'ABSOLUTE',
+      coordinates: [],
+      drawsOccludedSegments: true,
+      geodesic: false,
+      outerColor: gizmoPalette.z.outer,
+      outerWidth: 4,
+      strokeColor: gizmoPalette.z.stroke,
+      strokeWidth: 2.2,
+      zIndex: 999,
+    }) as InteractivePolylineElement,
+  };
+
+  const getCurrentBuildingById = (
+    buildingId: string | null,
+  ): BuildingConfig | undefined => {
+    if (!buildingId) {
+      return undefined;
+    }
+
+    return currentBuildings.find((building) => building.id === buildingId);
+  };
+
+  const syncCameraState = (): void => {
+    options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
+  };
 
   const refreshRoom = (roomId: string): void => {
     const room = roomMap.get(roomId);
@@ -286,7 +489,37 @@ export async function initializeGoogleMapsScene(
       return;
     }
 
+    const building = getCurrentBuildingById(room.buildingId);
+
+    if (!building) {
+      return;
+    }
+
+    room.polygon.outerCoordinates = buildRoomPolygonCoordinates(
+      building,
+      room.floor,
+      room.row,
+      room.col,
+    );
     setRoomAppearance(room, hoveredRoomId, selectedRoomId);
+    room.polygon.hidden = !roomsVisible;
+  };
+
+  const refreshGizmo = (): void => {
+    const selectedBuilding = getCurrentBuildingById(selectedBuildingId);
+
+    if (!selectedBuilding || !roomsVisible) {
+      for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
+        gizmoAxes[axis].hidden = true;
+      }
+      return;
+    }
+
+    for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
+      const gizmo = gizmoAxes[axis];
+      gizmo.coordinates = getGizmoAxisCoordinates(selectedBuilding, axis);
+      gizmo.hidden = false;
+    }
   };
 
   const setHoveredRoom = (roomId: string | null): void => {
@@ -316,6 +549,10 @@ export async function initializeGoogleMapsScene(
     const previousSelectedRoomId = selectedRoomId;
     selectedRoomId = roomId;
 
+    if (selectedRoomId) {
+      selectedBuildingId = getBuildingIdFromRoomId(selectedRoomId);
+    }
+
     if (previousSelectedRoomId) {
       refreshRoom(previousSelectedRoomId);
     }
@@ -323,6 +560,105 @@ export async function initializeGoogleMapsScene(
     if (selectedRoomId) {
       refreshRoom(selectedRoomId);
     }
+
+    refreshGizmo();
+  };
+
+  const renderRooms = (): void => {
+    for (const element of roomElements) {
+      element.remove();
+    }
+
+    roomElements = [];
+    roomMap = new Map<string, RoomMeta>();
+
+    for (const building of currentBuildings) {
+      const { cols, rows, floors } = building.grid;
+
+      for (let floor = 0; floor < floors; floor += 1) {
+        for (let row = 0; row < rows; row += 1) {
+          for (let col = 0; col < cols; col += 1) {
+            const sequenceIndex = floor * rows * cols + row * cols + col;
+            const status = patternStatus(sequenceIndex, building.statusPattern);
+            const roomId = buildEntityId(building.id, floor, row, col);
+            const polygon = new Polygon3DInteractiveElement({
+              altitudeMode: 'ABSOLUTE',
+              drawsOccludedSegments: true,
+              fillColor: roomPalette[status].fill,
+              geodesic: false,
+              outerCoordinates: buildRoomPolygonCoordinates(
+                building,
+                floor,
+                row,
+                col,
+              ),
+              strokeColor: roomPalette[status].stroke,
+              strokeWidth: 1.35,
+              zIndex: floor + 1,
+            }) as InteractivePolygonElement;
+
+            polygon.addEventListener('gmp-click', () => {
+              selectedBuildingId = building.id;
+              setSelectedRoom(roomId);
+              options.onRoomSelected?.(roomId);
+            });
+            polygon.addEventListener('mouseenter', () => {
+              setHoveredRoom(roomId);
+            });
+            polygon.addEventListener('mouseleave', () => {
+              setHoveredRoom(null);
+            });
+            polygon.addEventListener('pointerenter', () => {
+              setHoveredRoom(roomId);
+            });
+            polygon.addEventListener('pointerleave', () => {
+              setHoveredRoom(null);
+            });
+
+            const roomMeta: RoomMeta = {
+              baseFill: roomPalette[status].fill,
+              baseStroke: roomPalette[status].stroke,
+              buildingId: building.id,
+              col,
+              floor,
+              id: roomId,
+              polygon,
+              row,
+              status,
+            };
+
+            roomMap.set(roomId, roomMeta);
+            setRoomAppearance(roomMeta, hoveredRoomId, selectedRoomId);
+            polygon.hidden = !roomsVisible;
+            map.append(polygon);
+            roomElements.push(polygon);
+          }
+        }
+      }
+    }
+
+    for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
+      map.append(gizmoAxes[axis]);
+    }
+
+    refreshGizmo();
+  };
+
+  const applyBuildingTransform = (
+    buildingId: string,
+    nextBuilding: BuildingConfig,
+  ): void => {
+    currentBuildings = currentBuildings.map((building) =>
+      building.id === buildingId ? cloneBuildingConfig(nextBuilding) : building,
+    );
+
+    for (const room of roomMap.values()) {
+      if (room.buildingId === buildingId) {
+        refreshRoom(room.id);
+      }
+    }
+
+    refreshGizmo();
   };
 
   const enforceFixedCamera = (): void => {
@@ -352,8 +688,83 @@ export async function initializeGoogleMapsScene(
     applyCameraState(map, fixedCameraState);
     window.setTimeout(() => {
       enforcingCamera = false;
+      syncCameraState();
     }, 0);
   };
+
+  const handleDragMove = (event: PointerEvent): void => {
+    if (!dragState || event.pointerId !== dragState.pointerId) {
+      return;
+    }
+
+    const currentBuilding = getCurrentBuildingById(dragState.buildingId);
+
+    if (!currentBuilding) {
+      return;
+    }
+
+    const dx = event.clientX - dragState.startX;
+    const dy = event.clientY - dragState.startY;
+    const cameraHeading = map.heading ?? fixedCameraState.heading;
+    const dragProjection = projectDragToAxis(
+      dragState.axis,
+      dragState,
+      currentBuilding,
+      cameraHeading,
+      dx,
+      dy,
+    );
+    const metersPerPixel = Math.max((map.range ?? fixedCameraState.range) / 220, 0.04);
+    const movement = dragProjection * metersPerPixel;
+    const nextBuilding = cloneBuildingConfig(dragState.initialBuilding);
+
+    if (dragState.axis === 'x') {
+      nextBuilding.grid.offsetX = (dragState.initialBuilding.grid.offsetX ?? 0) + movement;
+    } else if (dragState.axis === 'y') {
+      nextBuilding.grid.offsetY = (dragState.initialBuilding.grid.offsetY ?? 0) + movement;
+    } else {
+      nextBuilding.grid.offsetZ =
+        (dragState.initialBuilding.grid.offsetZ ?? 0) + movement * 0.8;
+    }
+
+    applyBuildingTransform(dragState.buildingId, nextBuilding);
+  };
+
+  const handleDragEnd = (event: PointerEvent): void => {
+    if (!dragState || event.pointerId !== dragState.pointerId) {
+      return;
+    }
+
+    dragState = null;
+    container.style.cursor = '';
+  };
+
+  const startAxisDrag = (axis: AxisName) => (event: PointerEvent): void => {
+    const selectedBuilding = getCurrentBuildingById(selectedBuildingId);
+
+    if (!selectedBuilding) {
+      return;
+    }
+
+    event.preventDefault();
+    dragState = {
+      axis,
+      buildingId: selectedBuilding.id,
+      initialBuilding: cloneBuildingConfig(selectedBuilding),
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    container.style.cursor = axis === 'z' ? 'ns-resize' : 'grabbing';
+  };
+
+  for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
+    const gizmo = gizmoAxes[axis];
+    gizmo.hidden = true;
+    gizmo.style.pointerEvents = 'auto';
+    gizmo.addEventListener('pointerdown', startAxisDrag(axis) as EventListener);
+    map.append(gizmo);
+  }
 
   const cameraEvents = [
     'gmp-camerapositionchange',
@@ -366,7 +777,7 @@ export async function initializeGoogleMapsScene(
 
   const handleCameraEvent = (): void => {
     enforceFixedCamera();
-    options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
+    syncCameraState();
   };
 
   for (const eventName of cameraEvents) {
@@ -374,70 +785,25 @@ export async function initializeGoogleMapsScene(
   }
 
   applyCameraLock(map, fixedCameraState, cameraLocked);
-  options.onCameraStateChange?.(fixedCameraState);
-
-  for (const building of buildings) {
-    const { cols, rows, floors } = building.grid;
-
-    for (let floor = 0; floor < floors; floor += 1) {
-      for (let row = 0; row < rows; row += 1) {
-        for (let col = 0; col < cols; col += 1) {
-          const sequenceIndex = floor * rows * cols + row * cols + col;
-          const status = patternStatus(sequenceIndex, building.statusPattern);
-          const roomId = buildEntityId(building.id, floor, row, col);
-          const polygon = new Polygon3DInteractiveElement({
-            altitudeMode: 'ABSOLUTE',
-            drawsOccludedSegments: true,
-            fillColor: roomPalette[status].fill,
-            geodesic: false,
-            outerCoordinates: buildRoomPolygonCoordinates(building, floor, row, col),
-            strokeColor: roomPalette[status].stroke,
-            strokeWidth: 1.35,
-            zIndex: floor + 1,
-          }) as InteractivePolygonElement;
-
-          polygon.addEventListener('gmp-click', () => {
-            setSelectedRoom(roomId);
-            options.onRoomSelected?.(roomId);
-          });
-
-          polygon.addEventListener('mouseenter', () => {
-            setHoveredRoom(roomId);
-          });
-          polygon.addEventListener('mouseleave', () => {
-            setHoveredRoom(null);
-          });
-          polygon.addEventListener('pointerenter', () => {
-            setHoveredRoom(roomId);
-          });
-          polygon.addEventListener('pointerleave', () => {
-            setHoveredRoom(null);
-          });
-
-          roomMap.set(roomId, {
-            id: roomId,
-            buildingId: building.id,
-            status,
-            polygon,
-            baseFill: roomPalette[status].fill,
-            baseStroke: roomPalette[status].stroke,
-          });
-
-          map.append(polygon);
-        }
-      }
-    }
-  }
+  renderRooms();
+  refreshGizmo();
+  syncCameraState();
 
   const handlePointerLeave = (): void => {
-    setHoveredRoom(null);
+    if (!dragState) {
+      setHoveredRoom(null);
+    }
   };
 
   container.addEventListener('pointerleave', handlePointerLeave);
+  container.addEventListener('pointermove', handleDragMove);
+  window.addEventListener('pointerup', handleDragEnd);
 
   return {
     destroy: () => {
       container.removeEventListener('pointerleave', handlePointerLeave);
+      container.removeEventListener('pointermove', handleDragMove);
+      window.removeEventListener('pointerup', handleDragEnd);
 
       for (const eventName of cameraEvents) {
         map.removeEventListener(eventName, handleCameraEvent);
@@ -445,10 +811,22 @@ export async function initializeGoogleMapsScene(
 
       container.replaceChildren();
     },
+    getBuildingConfigs: () => cloneBuildingsConfig(currentBuildings),
+    getCameraState: () => readCameraState(map, fixedCameraState),
+    setBuildingConfigs: (nextBuildings: BuildingConfig[]) => {
+      currentBuildings = cloneBuildingsConfig(nextBuildings);
+      renderRooms();
+    },
     setCameraLocked: (locked: boolean) => {
       cameraLocked = locked;
       applyCameraLock(map, fixedCameraState, locked);
-      options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
+      syncCameraState();
+    },
+    setCameraState: (cameraState: CameraState) => {
+      fixedCameraState = cloneCameraState(cameraState);
+      applyCameraState(map, fixedCameraState);
+      applyCameraLock(map, fixedCameraState, cameraLocked);
+      syncCameraState();
     },
     setRoomsVisible: (visible: boolean) => {
       if (roomsVisible === visible) {
@@ -460,6 +838,12 @@ export async function initializeGoogleMapsScene(
       for (const room of roomMap.values()) {
         room.polygon.hidden = !visible;
       }
+
+      refreshGizmo();
+    },
+    setSelectedBuilding: (buildingId: string) => {
+      selectedBuildingId = buildingId || null;
+      refreshGizmo();
     },
     setSelectedRoom: (roomId: string) => {
       setSelectedRoom(roomId || null);

@@ -1,3 +1,5 @@
+import { parseNoCacheFromUrl } from './cameraUrlState';
+
 declare global {
   interface Window {
     __initGoogleMaps3D?: () => void;
@@ -12,6 +14,9 @@ declare global {
 type GoogleMaps3DLibrary = {
   Map3DElement: new (options?: Record<string, unknown>) => HTMLElement;
   Polygon3DInteractiveElement: new (
+    options?: Record<string, unknown>,
+  ) => HTMLElement;
+  Polyline3DInteractiveElement: new (
     options?: Record<string, unknown>,
   ) => HTMLElement;
 };
@@ -49,6 +54,10 @@ function ensureGoogleMapsScript(apiKey: string): Promise<void> {
       region: 'BR',
     });
 
+    if (parseNoCacheFromUrl()) {
+      params.set('cacheBust', String(Date.now()));
+    }
+
     script.async = true;
     script.defer = true;
     script.dataset.googleMaps3dLoader = 'true';
@@ -80,7 +89,9 @@ export async function loadGoogleMaps3D(): Promise<GoogleMaps3DLibrary> {
       const mapsImportLibrary = window.google?.maps?.importLibrary;
 
       if (!mapsImportLibrary) {
-        throw new Error('O carregador do Google Maps foi inicializado sem importLibrary.');
+        throw new Error(
+          'O carregador do Google Maps foi inicializado sem importLibrary.',
+        );
       }
 
       return (await mapsImportLibrary('maps3d')) as GoogleMaps3DLibrary;

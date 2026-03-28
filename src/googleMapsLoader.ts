@@ -13,10 +13,10 @@ declare global {
 
 type GoogleMaps3DLibrary = {
   Map3DElement: new (options?: Record<string, unknown>) => HTMLElement;
-  Polygon3DInteractiveElement: new (
+  Marker3DInteractiveElement: new (
     options?: Record<string, unknown>,
   ) => HTMLElement;
-  Polyline3DInteractiveElement: new (
+  Model3DInteractiveElement: new (
     options?: Record<string, unknown>,
   ) => HTMLElement;
 };

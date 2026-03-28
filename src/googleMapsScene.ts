@@ -1,12 +1,9 @@
 import {
-  buildEntityId,
-  buildings,
-  cloneBuildingConfig,
-  cloneBuildingsConfig,
-  getBuildingIdFromRoomId,
-  patternStatus,
-  type BuildingConfig,
-  type RoomStatus,
+  createBoxId,
+  cloneBoxConfig,
+  cloneBoxesConfig,
+  getBoxById,
+  type BoxConfig,
 } from './config';
 import {
   getDefaultCameraState,
@@ -15,73 +12,51 @@ import {
 } from './cameraUrlState';
 import { loadGoogleMaps3D } from './googleMapsLoader';
 
-const EARTH_RADIUS_METERS = 6_378_137;
 const LOCK_BOUNDS_DELTA = 0.00008;
 const CAMERA_EPSILON = 0.0001;
-
-const roomPalette: Record<RoomStatus, { fill: string; stroke: string }> = {
-  free: {
-    fill: 'rgba(34, 197, 94, 0.28)',
-    stroke: 'rgba(220, 252, 231, 0.65)',
-  },
-  busy: {
-    fill: 'rgba(239, 68, 68, 0.34)',
-    stroke: 'rgba(254, 202, 202, 0.72)',
-  },
-  blocked: {
-    fill: 'rgba(245, 158, 11, 0.4)',
-    stroke: 'rgba(254, 243, 199, 0.78)',
-  },
-};
-
-const hoverPalette = {
-  fill: 'rgba(250, 204, 21, 0.9)',
-  stroke: 'rgba(254, 240, 138, 1)',
-};
-
-const selectedPalette = {
-  fill: 'rgba(248, 250, 252, 0.92)',
-  stroke: 'rgba(255, 255, 255, 1)',
-};
-
-const gizmoPalette = {
-  x: {
-    outer: 'rgba(248, 113, 113, 1)',
-    stroke: 'rgba(239, 68, 68, 1)',
-  },
-  y: {
-    outer: 'rgba(74, 222, 128, 1)',
-    stroke: 'rgba(34, 197, 94, 1)',
-  },
-  z: {
-    outer: 'rgba(96, 165, 250, 1)',
-    stroke: 'rgba(59, 130, 246, 1)',
-  },
-};
+const DEFAULT_BOX_SCALE = {
+  x: 6,
+  y: 6,
+  z: 4,
+} as const;
+const MODEL_DEFAULT_SRC = './models/box-default.glb';
+const MODEL_EDIT_SRC = './models/box-editing.glb';
 
 type AxisName = 'x' | 'y' | 'z';
+type EditTool = 'move' | 'scale';
 
-type InteractivePolygonElement = HTMLElement & {
+type Vector3Literal = {
+  x: number;
+  y: number;
+  z: number;
+};
+
+type Orientation3DLiteral = {
+  heading?: number;
+  roll?: number;
+  tilt?: number;
+};
+
+type LocationClickEvent = Event & {
+  position?: LatLngAltitude;
+};
+
+type InteractiveMarkerElement = HTMLElement & {
   altitudeMode?: string;
-  drawsOccludedSegments?: boolean;
-  fillColor?: string;
-  geodesic?: boolean;
-  outerCoordinates?: LatLngAltitude[];
-  strokeColor?: string;
-  strokeWidth?: number;
+  drawsWhenOccluded?: boolean;
+  extruded?: boolean;
+  label?: string;
+  position?: LatLngAltitude;
+  sizePreserved?: boolean;
   zIndex?: number;
 };
 
-type InteractivePolylineElement = HTMLElement & {
+type InteractiveModelElement = HTMLElement & {
   altitudeMode?: string;
-  coordinates?: LatLngAltitude[];
-  drawsOccludedSegments?: boolean;
-  geodesic?: boolean;
-  outerColor?: string;
-  outerWidth?: number;
-  strokeColor?: string;
-  strokeWidth?: number;
-  zIndex?: number;
+  orientation?: Orientation3DLiteral;
+  position?: LatLngAltitude;
+  scale?: Vector3Literal;
+  src?: string;
 };
 
 type Map3DElementInstance = HTMLElement & {
@@ -106,49 +81,39 @@ type Map3DElementInstance = HTMLElement & {
   stopCameraAnimation?: () => Promise<void>;
 };
 
-interface RoomMeta {
-  baseFill: string;
-  baseStroke: string;
-  buildingId: string;
-  col: number;
-  floor: number;
-  id: string;
-  polygon: InteractivePolygonElement;
-  row: number;
-  status: RoomStatus;
+interface BoxMeta {
+  box: BoxConfig;
+  element: InteractiveModelElement;
 }
 
 interface DragState {
   axis: AxisName;
-  buildingId: string;
-  initialBuilding: BuildingConfig;
+  boxId: string;
   pointerId: number;
   startX: number;
   startY: number;
+  tool: EditTool;
 }
 
 export interface SceneController {
+  clearEditingBox: () => void;
   destroy: () => void;
-  getBuildingConfigs: () => BuildingConfig[];
   getCameraState: () => CameraState;
-  setBuildingConfigs: (nextBuildings: BuildingConfig[]) => void;
+  getBoxes: () => BoxConfig[];
+  setBoxes: (boxes: BoxConfig[]) => void;
   setCameraLocked: (locked: boolean) => void;
   setCameraState: (cameraState: CameraState) => void;
-  setRoomsVisible: (visible: boolean) => void;
-  setSelectedBuilding: (buildingId: string) => void;
-  setSelectedRoom: (roomId: string) => void;
+  setEditTool: (tool: EditTool) => void;
+  setEditingBox: (boxId: string | null) => void;
 }
 
 interface InitializeSceneOptions {
-  initialBuildings?: BuildingConfig[];
+  initialBoxes?: BoxConfig[];
   initialCameraState?: CameraState;
   onCameraStateChange?: (cameraState: CameraState) => void;
-  onRoomHovered?: (roomId: string | null) => void;
-  onRoomSelected?: (roomId: string) => void;
-}
-
-function degreesToRadians(value: number): number {
-  return (value * Math.PI) / 180;
+  onBoxesChange?: (boxes: BoxConfig[]) => void;
+  onEditingBoxChange?: (boxId: string | null) => void;
+  onHoverBoxChange?: (boxId: string | null) => void;
 }
 
 function cloneCameraState(cameraState: CameraState): CameraState {
@@ -160,37 +125,6 @@ function cloneCameraState(cameraState: CameraState): CameraState {
     heading: cameraState.heading,
     range: cameraState.range,
     tilt: cameraState.tilt,
-  };
-}
-
-function translateLatLng(
-  originLat: number,
-  originLng: number,
-  eastMeters: number,
-  northMeters: number,
-): { lat: number; lng: number } {
-  const latRadians = degreesToRadians(originLat);
-  const dLat = northMeters / EARTH_RADIUS_METERS;
-  const dLng = eastMeters / (EARTH_RADIUS_METERS * Math.cos(latRadians));
-
-  return {
-    lat: originLat + (dLat * 180) / Math.PI,
-    lng: originLng + (dLng * 180) / Math.PI,
-  };
-}
-
-function rotateLocalOffset(
-  localX: number,
-  localY: number,
-  headingDeg: number,
-): { east: number; north: number } {
-  const headingRadians = degreesToRadians(headingDeg);
-
-  return {
-    east:
-      localX * Math.cos(headingRadians) + localY * Math.sin(headingRadians),
-    north:
-      -localX * Math.sin(headingRadians) + localY * Math.cos(headingRadians),
   };
 }
 
@@ -249,133 +183,40 @@ function applyCameraLock(
   map.maxTilt = undefined;
 }
 
-function buildRoomPolygonCoordinates(
-  building: BuildingConfig,
-  floor: number,
-  row: number,
-  col: number,
-): LatLngAltitude[] {
-  const { cellX, cellY, cellZ, cols, rows, padding } = building.grid;
-  const offsetX = building.grid.offsetX ?? 0;
-  const offsetY = building.grid.offsetY ?? 0;
-  const offsetZ = building.grid.offsetZ ?? 0;
-  const halfWidth = (cellX * padding) / 2;
-  const halfDepth = (cellY * padding) / 2;
-  const centerX = offsetX + (col - (cols - 1) / 2) * cellX;
-  const centerY = offsetY + (row - (rows - 1) / 2) * cellY;
-  const altitude = building.baseHeight + offsetZ + floor * cellZ + cellZ / 2;
-  const corners = [
-    { x: centerX - halfWidth, y: centerY - halfDepth },
-    { x: centerX + halfWidth, y: centerY - halfDepth },
-    { x: centerX + halfWidth, y: centerY + halfDepth },
-    { x: centerX - halfWidth, y: centerY + halfDepth },
-  ];
+function modelScaleFromBox(box: BoxConfig): Vector3Literal {
+  return {
+    x: box.scale.x,
+    y: box.scale.z,
+    z: box.scale.y,
+  };
+}
 
-  return corners.map(({ x, y }) => {
-    const { east, north } = rotateLocalOffset(x, y, building.headingDeg);
-    const { lat, lng } = translateLatLng(
-      building.lat,
-      building.lon,
-      east,
-      north,
-    );
-
+function getHandlePosition(box: BoxConfig, axis: AxisName): LatLngAltitude {
+  if (axis === 'x') {
     return {
-      altitude,
-      lat,
-      lng,
+      altitude: box.position.altitude,
+      lat: box.position.lat,
+      lng: box.position.lng + box.scale.x * 0.0000036,
     };
-  });
-}
-
-function getBuildingCenter(building: BuildingConfig): LatLngAltitude {
-  const offsetX = building.grid.offsetX ?? 0;
-  const offsetY = building.grid.offsetY ?? 0;
-  const offsetZ = building.grid.offsetZ ?? 0;
-  const { east, north } = rotateLocalOffset(offsetX, offsetY, building.headingDeg);
-  const { lat, lng } = translateLatLng(building.lat, building.lon, east, north);
-
-  return {
-    altitude: building.baseHeight + offsetZ + (building.grid.floors * building.grid.cellZ) / 2,
-    lat,
-    lng,
-  };
-}
-
-function getGizmoAxisCoordinates(
-  building: BuildingConfig,
-  axis: AxisName,
-): LatLngAltitude[] {
-  const center = getBuildingCenter(building);
-  const { cols, rows, floors, cellX, cellY, cellZ } = building.grid;
-  const localLengthX = Math.max(cols * cellX * 0.6, 12);
-  const localLengthY = Math.max(rows * cellY * 0.9, 12);
-  const localLengthZ = Math.max(floors * cellZ * 0.8, 12);
-
-  if (axis === 'z') {
-    return [
-      center,
-      {
-        ...center,
-        altitude: center.altitude + localLengthZ,
-      },
-    ];
   }
 
-  const localEnd =
-    axis === 'x'
-      ? { x: (building.grid.offsetX ?? 0) + localLengthX, y: building.grid.offsetY ?? 0 }
-      : { x: building.grid.offsetX ?? 0, y: (building.grid.offsetY ?? 0) + localLengthY };
-  const { east, north } = rotateLocalOffset(
-    localEnd.x,
-    localEnd.y,
-    building.headingDeg,
-  );
-  const { lat, lng } = translateLatLng(building.lat, building.lon, east, north);
-
-  return [
-    center,
-    {
-      altitude: center.altitude,
-      lat,
-      lng,
-    },
-  ];
-}
-
-function resolveRoomColors(
-  room: RoomMeta,
-  hoveredRoomId: string | null,
-  selectedRoomId: string | null,
-): { fill: string; stroke: string } {
-  if (room.id === hoveredRoomId) {
-    return hoverPalette;
-  }
-
-  if (room.id === selectedRoomId) {
-    return selectedPalette;
+  if (axis === 'y') {
+    return {
+      altitude: box.position.altitude,
+      lat: box.position.lat + box.scale.y * 0.0000036,
+      lng: box.position.lng,
+    };
   }
 
   return {
-    fill: room.baseFill,
-    stroke: room.baseStroke,
+    altitude: box.position.altitude + box.scale.z * 0.7,
+    lat: box.position.lat,
+    lng: box.position.lng,
   };
 }
 
-function setRoomAppearance(
-  room: RoomMeta,
-  hoveredRoomId: string | null,
-  selectedRoomId: string | null,
-): void {
-  const colors = resolveRoomColors(room, hoveredRoomId, selectedRoomId);
-  room.polygon.fillColor = colors.fill;
-  room.polygon.strokeColor = colors.stroke;
-}
-
-function projectDragToAxis(
+function projectDrag(
   axis: AxisName,
-  dragState: DragState,
-  currentBuilding: BuildingConfig,
   cameraHeading: number,
   dx: number,
   dy: number,
@@ -384,30 +225,35 @@ function projectDragToAxis(
     return -dy;
   }
 
-  const axisHeading =
-    axis === 'x'
-      ? currentBuilding.headingDeg
-      : currentBuilding.headingDeg + 90;
-  const relativeAngle = degreesToRadians(axisHeading - cameraHeading);
+  const axisHeading = axis === 'x' ? 90 : 0;
+  const angle = ((axisHeading - cameraHeading) * Math.PI) / 180;
+  return dx * Math.cos(angle) - dy * Math.sin(angle);
+}
 
-  return dx * Math.cos(relativeAngle) - dy * Math.sin(relativeAngle);
+function updateBoxElement(meta: BoxMeta, editingBoxId: string | null): void {
+  meta.element.position = { ...meta.box.position };
+  meta.element.scale = modelScaleFromBox(meta.box);
+  meta.element.src = meta.box.id === editingBoxId ? MODEL_EDIT_SRC : MODEL_DEFAULT_SRC;
 }
 
 export async function initializeGoogleMapsScene(
   container: HTMLElement,
   options: InitializeSceneOptions = {},
 ): Promise<SceneController> {
-  const {
-    Map3DElement,
-    Polygon3DInteractiveElement,
-    Polyline3DInteractiveElement,
-  } = await loadGoogleMaps3D();
+  const { Map3DElement, Marker3DInteractiveElement, Model3DInteractiveElement } =
+    await loadGoogleMaps3D();
+
   let fixedCameraState = cloneCameraState(
     options.initialCameraState ?? getDefaultCameraState(),
   );
-  let currentBuildings = cloneBuildingsConfig(
-    options.initialBuildings ?? buildings,
-  );
+  let boxes = cloneBoxesConfig(options.initialBoxes ?? []);
+  let editTool: EditTool = 'move';
+  let editingBoxId: string | null = null;
+  let hoveredBoxId: string | null = null;
+  let dragState: DragState | null = null;
+  let cameraLocked = false;
+  let enforcingCamera = false;
+
   const map = new Map3DElement({
     center: fixedCameraState.center,
     defaultUIHidden: true,
@@ -419,267 +265,200 @@ export async function initializeGoogleMapsScene(
     tilt: fixedCameraState.tilt,
   }) as Map3DElementInstance;
 
+  const boxElements = new Map<string, BoxMeta>();
+  const axisHandles: Record<AxisName, InteractiveMarkerElement> = {
+    x: new Marker3DInteractiveElement({
+      altitudeMode: 'ABSOLUTE',
+      drawsWhenOccluded: true,
+      label: 'X',
+      sizePreserved: true,
+      zIndex: 999,
+    }) as InteractiveMarkerElement,
+    y: new Marker3DInteractiveElement({
+      altitudeMode: 'ABSOLUTE',
+      drawsWhenOccluded: true,
+      label: 'Y',
+      sizePreserved: true,
+      zIndex: 999,
+    }) as InteractiveMarkerElement,
+    z: new Marker3DInteractiveElement({
+      altitudeMode: 'ABSOLUTE',
+      drawsWhenOccluded: true,
+      label: 'Z',
+      sizePreserved: true,
+      zIndex: 999,
+    }) as InteractiveMarkerElement,
+  };
+
   container.replaceChildren();
   container.append(map);
-
-  let roomMap = new Map<string, RoomMeta>();
-  let roomElements: InteractivePolygonElement[] = [];
-  let roomsVisible = true;
-  let cameraLocked = true;
-  let hoveredRoomId: string | null = null;
-  let selectedBuildingId: string | null = currentBuildings[0]?.id ?? null;
-  let selectedRoomId: string | null = null;
-  let enforcingCamera = false;
-  let dragState: DragState | null = null;
-
-  const gizmoAxes: Record<AxisName, InteractivePolylineElement> = {
-    x: new Polyline3DInteractiveElement({
-      altitudeMode: 'ABSOLUTE',
-      coordinates: [],
-      drawsOccludedSegments: true,
-      geodesic: false,
-      outerColor: gizmoPalette.x.outer,
-      outerWidth: 4,
-      strokeColor: gizmoPalette.x.stroke,
-      strokeWidth: 2.2,
-      zIndex: 999,
-    }) as InteractivePolylineElement,
-    y: new Polyline3DInteractiveElement({
-      altitudeMode: 'ABSOLUTE',
-      coordinates: [],
-      drawsOccludedSegments: true,
-      geodesic: false,
-      outerColor: gizmoPalette.y.outer,
-      outerWidth: 4,
-      strokeColor: gizmoPalette.y.stroke,
-      strokeWidth: 2.2,
-      zIndex: 999,
-    }) as InteractivePolylineElement,
-    z: new Polyline3DInteractiveElement({
-      altitudeMode: 'ABSOLUTE',
-      coordinates: [],
-      drawsOccludedSegments: true,
-      geodesic: false,
-      outerColor: gizmoPalette.z.outer,
-      outerWidth: 4,
-      strokeColor: gizmoPalette.z.stroke,
-      strokeWidth: 2.2,
-      zIndex: 999,
-    }) as InteractivePolylineElement,
-  };
-
-  const getCurrentBuildingById = (
-    buildingId: string | null,
-  ): BuildingConfig | undefined => {
-    if (!buildingId) {
-      return undefined;
-    }
-
-    return currentBuildings.find((building) => building.id === buildingId);
-  };
 
   const syncCameraState = (): void => {
     options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
   };
 
-  const refreshRoom = (roomId: string): void => {
-    const room = roomMap.get(roomId);
-
-    if (!room) {
-      return;
-    }
-
-    const building = getCurrentBuildingById(room.buildingId);
-
-    if (!building) {
-      return;
-    }
-
-    room.polygon.outerCoordinates = buildRoomPolygonCoordinates(
-      building,
-      room.floor,
-      room.row,
-      room.col,
-    );
-    setRoomAppearance(room, hoveredRoomId, selectedRoomId);
-    room.polygon.hidden = !roomsVisible;
+  const syncBoxes = (): void => {
+    options.onBoxesChange?.(cloneBoxesConfig(boxes));
   };
 
-  const refreshGizmo = (): void => {
-    const selectedBuilding = getCurrentBuildingById(selectedBuildingId);
+  const setHoveredBox = (boxId: string | null): void => {
+    if (hoveredBoxId === boxId) {
+      return;
+    }
 
-    if (!selectedBuilding || !roomsVisible) {
-      for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
-        gizmoAxes[axis].hidden = true;
+    hoveredBoxId = boxId;
+    options.onHoverBoxChange?.(boxId);
+  };
+
+  const refreshAxisHandles = (): void => {
+    const editingBox = editingBoxId ? getBoxById(editingBoxId, boxes) : undefined;
+
+    if (!editingBox) {
+      for (const axis of Object.keys(axisHandles) as AxisName[]) {
+        axisHandles[axis].hidden = true;
       }
       return;
     }
 
-    for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
-      const gizmo = gizmoAxes[axis];
-      gizmo.coordinates = getGizmoAxisCoordinates(selectedBuilding, axis);
-      gizmo.hidden = false;
+    for (const axis of Object.keys(axisHandles) as AxisName[]) {
+      axisHandles[axis].position = getHandlePosition(editingBox, axis);
+      axisHandles[axis].hidden = false;
     }
   };
 
-  const setHoveredRoom = (roomId: string | null): void => {
-    if (hoveredRoomId === roomId) {
-      return;
+  const renderBoxes = (): void => {
+    if (editingBoxId && !getBoxById(editingBoxId, boxes)) {
+      editingBoxId = null;
+      options.onEditingBoxChange?.(null);
     }
 
-    const previousHoveredRoomId = hoveredRoomId;
-    hoveredRoomId = roomId;
-
-    if (previousHoveredRoomId) {
-      refreshRoom(previousHoveredRoomId);
+    for (const meta of boxElements.values()) {
+      meta.element.remove();
     }
 
-    if (hoveredRoomId) {
-      refreshRoom(hoveredRoomId);
-    }
+    boxElements.clear();
 
-    options.onRoomHovered?.(hoveredRoomId);
-  };
+    for (const box of boxes) {
+      const element = new Model3DInteractiveElement({
+        altitudeMode: 'ABSOLUTE',
+        orientation: {
+          heading: 0,
+          roll: 0,
+          tilt: 0,
+        },
+        position: { ...box.position },
+        scale: modelScaleFromBox(box),
+        src: box.id === editingBoxId ? MODEL_EDIT_SRC : MODEL_DEFAULT_SRC,
+      }) as InteractiveModelElement;
 
-  const setSelectedRoom = (roomId: string | null): void => {
-    if (selectedRoomId === roomId) {
-      return;
-    }
-
-    const previousSelectedRoomId = selectedRoomId;
-    selectedRoomId = roomId;
-
-    if (selectedRoomId) {
-      selectedBuildingId = getBuildingIdFromRoomId(selectedRoomId);
-    }
-
-    if (previousSelectedRoomId) {
-      refreshRoom(previousSelectedRoomId);
-    }
-
-    if (selectedRoomId) {
-      refreshRoom(selectedRoomId);
-    }
-
-    refreshGizmo();
-  };
-
-  const renderRooms = (): void => {
-    for (const element of roomElements) {
-      element.remove();
-    }
-
-    roomElements = [];
-    roomMap = new Map<string, RoomMeta>();
-
-    for (const building of currentBuildings) {
-      const { cols, rows, floors } = building.grid;
-
-      for (let floor = 0; floor < floors; floor += 1) {
-        for (let row = 0; row < rows; row += 1) {
-          for (let col = 0; col < cols; col += 1) {
-            const sequenceIndex = floor * rows * cols + row * cols + col;
-            const status = patternStatus(sequenceIndex, building.statusPattern);
-            const roomId = buildEntityId(building.id, floor, row, col);
-            const polygon = new Polygon3DInteractiveElement({
-              altitudeMode: 'ABSOLUTE',
-              drawsOccludedSegments: true,
-              fillColor: roomPalette[status].fill,
-              geodesic: false,
-              outerCoordinates: buildRoomPolygonCoordinates(
-                building,
-                floor,
-                row,
-                col,
-              ),
-              strokeColor: roomPalette[status].stroke,
-              strokeWidth: 1.35,
-              zIndex: floor + 1,
-            }) as InteractivePolygonElement;
-
-            polygon.addEventListener('gmp-click', () => {
-              selectedBuildingId = building.id;
-              setSelectedRoom(roomId);
-              options.onRoomSelected?.(roomId);
-            });
-            polygon.addEventListener('mouseenter', () => {
-              setHoveredRoom(roomId);
-            });
-            polygon.addEventListener('mouseleave', () => {
-              setHoveredRoom(null);
-            });
-            polygon.addEventListener('pointerenter', () => {
-              setHoveredRoom(roomId);
-            });
-            polygon.addEventListener('pointerleave', () => {
-              setHoveredRoom(null);
-            });
-
-            const roomMeta: RoomMeta = {
-              baseFill: roomPalette[status].fill,
-              baseStroke: roomPalette[status].stroke,
-              buildingId: building.id,
-              col,
-              floor,
-              id: roomId,
-              polygon,
-              row,
-              status,
-            };
-
-            roomMap.set(roomId, roomMeta);
-            setRoomAppearance(roomMeta, hoveredRoomId, selectedRoomId);
-            polygon.hidden = !roomsVisible;
-            map.append(polygon);
-            roomElements.push(polygon);
-          }
+      element.addEventListener('pointerdown', (event) => {
+        if (event.button !== 2) {
+          return;
         }
-      }
+
+        event.preventDefault();
+        event.stopPropagation();
+        editingBoxId = box.id;
+        options.onEditingBoxChange?.(box.id);
+        refreshAxisHandles();
+        renderBoxes();
+      });
+
+      element.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        editingBoxId = box.id;
+        options.onEditingBoxChange?.(box.id);
+        refreshAxisHandles();
+        renderBoxes();
+      });
+
+      element.addEventListener('pointerenter', () => {
+        setHoveredBox(box.id);
+      });
+      element.addEventListener('pointerleave', () => {
+        setHoveredBox(null);
+      });
+
+      boxElements.set(box.id, {
+        box,
+        element,
+      });
+      map.append(element);
     }
 
-    for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
-      map.append(gizmoAxes[axis]);
+    for (const axis of Object.keys(axisHandles) as AxisName[]) {
+      map.append(axisHandles[axis]);
     }
 
-    refreshGizmo();
+    refreshAxisHandles();
   };
 
-  const applyBuildingTransform = (
-    buildingId: string,
-    nextBuilding: BuildingConfig,
-  ): void => {
-    currentBuildings = currentBuildings.map((building) =>
-      building.id === buildingId ? cloneBuildingConfig(nextBuilding) : building,
-    );
-
-    for (const room of roomMap.values()) {
-      if (room.buildingId === buildingId) {
-        refreshRoom(room.id);
-      }
-    }
-
-    refreshGizmo();
+  const setEditingBox = (boxId: string | null): void => {
+    editingBoxId = boxId;
+    options.onEditingBoxChange?.(boxId);
+    renderBoxes();
   };
 
-  const enforceFixedCamera = (): void => {
-    if (!cameraLocked || enforcingCamera) {
+  const upsertBox = (nextBox: BoxConfig): void => {
+    boxes = boxes.some((box) => box.id === nextBox.id)
+      ? boxes.map((box) => (box.id === nextBox.id ? cloneBoxConfig(nextBox) : box))
+      : [...boxes, cloneBoxConfig(nextBox)];
+    renderBoxes();
+    syncBoxes();
+  };
+
+  const handleMapClick = (event: Event): void => {
+    const clickEvent = event as LocationClickEvent;
+
+    if (!clickEvent.position) {
       return;
     }
 
-    const headingDiff = Math.abs((map.heading ?? 0) - fixedCameraState.heading);
-    const tiltDiff = Math.abs((map.tilt ?? 0) - fixedCameraState.tilt);
-    const rangeDiff = Math.abs((map.range ?? 0) - fixedCameraState.range);
-    const center = map.center;
-    const centerLatDiff = Math.abs((center?.lat ?? 0) - fixedCameraState.center.lat);
-    const centerLngDiff = Math.abs((center?.lng ?? 0) - fixedCameraState.center.lng);
+    if (!altPressedRef.current) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const nextBox: BoxConfig = {
+      id: createBoxId(),
+      position: {
+        altitude: clickEvent.position.altitude + DEFAULT_BOX_SCALE.z / 2,
+        lat: clickEvent.position.lat,
+        lng: clickEvent.position.lng,
+      },
+      scale: { ...DEFAULT_BOX_SCALE },
+    };
+
+    boxes = [...boxes, nextBox];
+    editingBoxId = nextBox.id;
+    renderBoxes();
+    syncBoxes();
+    options.onEditingBoxChange?.(nextBox.id);
+  };
+
+  const handleCameraEvent = (): void => {
+    if (!cameraLocked || enforcingCamera) {
+      syncCameraState();
+      return;
+    }
+
+    const currentState = readCameraState(map, fixedCameraState);
+    const headingDiff = Math.abs(currentState.heading - fixedCameraState.heading);
+    const tiltDiff = Math.abs(currentState.tilt - fixedCameraState.tilt);
+    const rangeDiff = Math.abs(currentState.range - fixedCameraState.range);
+    const latDiff = Math.abs(currentState.center.lat - fixedCameraState.center.lat);
+    const lngDiff = Math.abs(currentState.center.lng - fixedCameraState.center.lng);
 
     if (
       headingDiff < CAMERA_EPSILON &&
       tiltDiff < CAMERA_EPSILON &&
       rangeDiff < CAMERA_EPSILON &&
-      centerLatDiff < CAMERA_EPSILON &&
-      centerLngDiff < CAMERA_EPSILON
+      latDiff < CAMERA_EPSILON &&
+      lngDiff < CAMERA_EPSILON
     ) {
+      syncCameraState();
       return;
     }
 
@@ -692,46 +471,103 @@ export async function initializeGoogleMapsScene(
     }, 0);
   };
 
-  const handleDragMove = (event: PointerEvent): void => {
-    if (!dragState || event.pointerId !== dragState.pointerId) {
+  const altPressedRef = { current: false };
+
+  const handleKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Alt') {
+      altPressedRef.current = true;
+    }
+  };
+
+  const handleKeyUp = (event: KeyboardEvent): void => {
+    if (event.key === 'Alt') {
+      altPressedRef.current = false;
+    }
+  };
+
+  const handlePointerDown = (event: PointerEvent): void => {
+    if (event.button === 2 && (event.target === map || event.target === container)) {
+      event.preventDefault();
+      setEditingBox(null);
+    }
+  };
+
+  const handleContextMenu = (event: MouseEvent): void => {
+    if (event.target === map || event.target === container) {
+      event.preventDefault();
+      setEditingBox(null);
+    }
+  };
+
+  const handleAxisPointerDown = (axis: AxisName) => (event: PointerEvent): void => {
+    if (!editingBoxId) {
       return;
     }
 
-    const currentBuilding = getCurrentBuildingById(dragState.buildingId);
+    event.preventDefault();
+    event.stopPropagation();
+    dragState = {
+      axis,
+      boxId: editingBoxId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      tool: editTool,
+    };
+    container.style.cursor = dragState.tool === 'scale' ? 'ew-resize' : 'grabbing';
+  };
 
-    if (!currentBuilding) {
+  const handlePointerMove = (event: PointerEvent): void => {
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const box = getBoxById(dragState.boxId, boxes);
+
+    if (!box) {
       return;
     }
 
     const dx = event.clientX - dragState.startX;
     const dy = event.clientY - dragState.startY;
-    const cameraHeading = map.heading ?? fixedCameraState.heading;
-    const dragProjection = projectDragToAxis(
+    const cameraRange = map.range ?? fixedCameraState.range;
+    const axisPixels = projectDrag(
       dragState.axis,
-      dragState,
-      currentBuilding,
-      cameraHeading,
+      map.heading ?? fixedCameraState.heading,
       dx,
       dy,
     );
-    const metersPerPixel = Math.max((map.range ?? fixedCameraState.range) / 220, 0.04);
-    const movement = dragProjection * metersPerPixel;
-    const nextBuilding = cloneBuildingConfig(dragState.initialBuilding);
+    const horizontalDegrees = axisPixels * Math.max(cameraRange * 0.00000001, 0.00000015);
+    const verticalMeters = -dy * Math.max(cameraRange / 220, 0.02);
+    const scaleMeters = axisPixels * Math.max(cameraRange / 450, 0.04);
+    const nextBox = cloneBoxConfig(box);
 
-    if (dragState.axis === 'x') {
-      nextBuilding.grid.offsetX = (dragState.initialBuilding.grid.offsetX ?? 0) + movement;
+    if (dragState.tool === 'move') {
+      if (dragState.axis === 'x') {
+        nextBox.position.lng += horizontalDegrees;
+      } else if (dragState.axis === 'y') {
+        nextBox.position.lat += horizontalDegrees;
+      } else {
+        nextBox.position.altitude += verticalMeters;
+      }
+    } else if (dragState.axis === 'x') {
+      nextBox.scale.x = Math.max(0.5, nextBox.scale.x + scaleMeters);
     } else if (dragState.axis === 'y') {
-      nextBuilding.grid.offsetY = (dragState.initialBuilding.grid.offsetY ?? 0) + movement;
+      nextBox.scale.y = Math.max(0.5, nextBox.scale.y + scaleMeters);
     } else {
-      nextBuilding.grid.offsetZ =
-        (dragState.initialBuilding.grid.offsetZ ?? 0) + movement * 0.8;
+      const bottomAltitude = nextBox.position.altitude - nextBox.scale.z / 2;
+      nextBox.scale.z = Math.max(
+        0.5,
+        nextBox.scale.z + verticalMeters,
+      );
+      nextBox.position.altitude = bottomAltitude + nextBox.scale.z / 2;
     }
 
-    applyBuildingTransform(dragState.buildingId, nextBuilding);
+    upsertBox(nextBox);
   };
 
-  const handleDragEnd = (event: PointerEvent): void => {
-    if (!dragState || event.pointerId !== dragState.pointerId) {
+  const handlePointerUp = (event: PointerEvent): void => {
+    if (!dragState || dragState.pointerId !== event.pointerId) {
       return;
     }
 
@@ -739,31 +575,10 @@ export async function initializeGoogleMapsScene(
     container.style.cursor = '';
   };
 
-  const startAxisDrag = (axis: AxisName) => (event: PointerEvent): void => {
-    const selectedBuilding = getCurrentBuildingById(selectedBuildingId);
-
-    if (!selectedBuilding) {
-      return;
-    }
-
-    event.preventDefault();
-    dragState = {
-      axis,
-      buildingId: selectedBuilding.id,
-      initialBuilding: cloneBuildingConfig(selectedBuilding),
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-    };
-    container.style.cursor = axis === 'z' ? 'ns-resize' : 'grabbing';
-  };
-
-  for (const axis of Object.keys(gizmoAxes) as AxisName[]) {
-    const gizmo = gizmoAxes[axis];
-    gizmo.hidden = true;
-    gizmo.style.pointerEvents = 'auto';
-    gizmo.addEventListener('pointerdown', startAxisDrag(axis) as EventListener);
-    map.append(gizmo);
+  for (const axis of Object.keys(axisHandles) as AxisName[]) {
+    const handle = axisHandles[axis];
+    handle.hidden = true;
+    handle.addEventListener('pointerdown', handleAxisPointerDown(axis));
   }
 
   const cameraEvents = [
@@ -775,47 +590,47 @@ export async function initializeGoogleMapsScene(
     'gmp-tiltchange',
   ] as const;
 
-  const handleCameraEvent = (): void => {
-    enforceFixedCamera();
-    syncCameraState();
-  };
-
   for (const eventName of cameraEvents) {
     map.addEventListener(eventName, handleCameraEvent);
   }
 
+  map.addEventListener('gmp-click', handleMapClick);
+  container.addEventListener('pointerdown', handlePointerDown);
+  container.addEventListener('contextmenu', handleContextMenu);
+  container.addEventListener('pointermove', handlePointerMove);
+  window.addEventListener('pointerup', handlePointerUp);
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+
   applyCameraLock(map, fixedCameraState, cameraLocked);
-  renderRooms();
-  refreshGizmo();
+  renderBoxes();
   syncCameraState();
-
-  const handlePointerLeave = (): void => {
-    if (!dragState) {
-      setHoveredRoom(null);
-    }
-  };
-
-  container.addEventListener('pointerleave', handlePointerLeave);
-  container.addEventListener('pointermove', handleDragMove);
-  window.addEventListener('pointerup', handleDragEnd);
+  syncBoxes();
 
   return {
+    clearEditingBox: () => {
+      setEditingBox(null);
+    },
     destroy: () => {
-      container.removeEventListener('pointerleave', handlePointerLeave);
-      container.removeEventListener('pointermove', handleDragMove);
-      window.removeEventListener('pointerup', handleDragEnd);
-
       for (const eventName of cameraEvents) {
         map.removeEventListener(eventName, handleCameraEvent);
       }
 
+      map.removeEventListener('gmp-click', handleMapClick);
+      container.removeEventListener('pointerdown', handlePointerDown);
+      container.removeEventListener('contextmenu', handleContextMenu);
+      container.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
       container.replaceChildren();
     },
-    getBuildingConfigs: () => cloneBuildingsConfig(currentBuildings),
     getCameraState: () => readCameraState(map, fixedCameraState),
-    setBuildingConfigs: (nextBuildings: BuildingConfig[]) => {
-      currentBuildings = cloneBuildingsConfig(nextBuildings);
-      renderRooms();
+    getBoxes: () => cloneBoxesConfig(boxes),
+    setBoxes: (nextBoxes: BoxConfig[]) => {
+      boxes = cloneBoxesConfig(nextBoxes);
+      renderBoxes();
+      syncBoxes();
     },
     setCameraLocked: (locked: boolean) => {
       cameraLocked = locked;
@@ -828,25 +643,11 @@ export async function initializeGoogleMapsScene(
       applyCameraLock(map, fixedCameraState, cameraLocked);
       syncCameraState();
     },
-    setRoomsVisible: (visible: boolean) => {
-      if (roomsVisible === visible) {
-        return;
-      }
-
-      roomsVisible = visible;
-
-      for (const room of roomMap.values()) {
-        room.polygon.hidden = !visible;
-      }
-
-      refreshGizmo();
+    setEditTool: (tool: EditTool) => {
+      editTool = tool;
     },
-    setSelectedBuilding: (buildingId: string) => {
-      selectedBuildingId = buildingId || null;
-      refreshGizmo();
-    },
-    setSelectedRoom: (roomId: string) => {
-      setSelectedRoom(roomId || null);
+    setEditingBox: (boxId: string | null) => {
+      setEditingBox(boxId);
     },
   };
 }

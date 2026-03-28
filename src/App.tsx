@@ -9,12 +9,10 @@ import {
   type CameraState,
 } from './cameraUrlState';
 import {
-  buildings,
-  cloneBuildingsConfig,
-  getBuildingIdFromRoomId,
-  getRoomById,
-  getRoomsForBuilding,
-  type BuildingConfig,
+  cloneBoxesConfig,
+  getBoxById,
+  initialBoxes,
+  type BoxConfig,
 } from './config';
 import {
   initializeGoogleMapsScene,
@@ -22,12 +20,13 @@ import {
 } from './googleMapsScene';
 
 type SceneStatus = 'loading' | 'ready' | 'error';
+type EditTool = 'move' | 'scale';
 
 interface LayoutSnapshot {
-  buildings: BuildingConfig[];
+  boxes: BoxConfig[];
   cameraState: CameraState;
   exportedAt: string;
-  version: 1;
+  version: 2;
 }
 
 function isCameraState(value: unknown): value is CameraState {
@@ -49,32 +48,27 @@ function isCameraState(value: unknown): value is CameraState {
   );
 }
 
-function isBuildingConfigArray(value: unknown): value is BuildingConfig[] {
+function isBoxConfigArray(value: unknown): value is BoxConfig[] {
   return (
     Array.isArray(value) &&
-    value.every((building) => {
-      if (!building || typeof building !== 'object') {
+    value.every((box) => {
+      if (!box || typeof box !== 'object') {
         return false;
       }
 
-      const candidate = building as Partial<BuildingConfig>;
+      const candidate = box as Partial<BoxConfig>;
       return (
         typeof candidate.id === 'string' &&
-        typeof candidate.name === 'string' &&
-        typeof candidate.lat === 'number' &&
-        typeof candidate.lon === 'number' &&
-        typeof candidate.baseHeight === 'number' &&
-        typeof candidate.headingDeg === 'number' &&
-        !!candidate.grid &&
-        typeof candidate.grid === 'object' &&
-        typeof candidate.grid.cols === 'number' &&
-        typeof candidate.grid.rows === 'number' &&
-        typeof candidate.grid.floors === 'number' &&
-        typeof candidate.grid.cellX === 'number' &&
-        typeof candidate.grid.cellY === 'number' &&
-        typeof candidate.grid.cellZ === 'number' &&
-        typeof candidate.grid.padding === 'number' &&
-        Array.isArray(candidate.statusPattern)
+        !!candidate.position &&
+        typeof candidate.position === 'object' &&
+        typeof candidate.position.lat === 'number' &&
+        typeof candidate.position.lng === 'number' &&
+        typeof candidate.position.altitude === 'number' &&
+        !!candidate.scale &&
+        typeof candidate.scale === 'object' &&
+        typeof candidate.scale.x === 'number' &&
+        typeof candidate.scale.y === 'number' &&
+        typeof candidate.scale.z === 'number'
       );
     })
   );
@@ -82,40 +76,36 @@ function isBuildingConfigArray(value: unknown): value is BuildingConfig[] {
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const sceneRef = useRef<SceneController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const sceneRef = useRef<SceneController | null>(null);
   const startupCameraState = parseCameraStateFromUrl() ?? getDefaultCameraState();
   const startupNoCache = parseNoCacheFromUrl();
   const [defaultCameraState, setDefaultCameraState] =
     useState<CameraState>(startupCameraState);
-  const [buildingConfigs, setBuildingConfigs] = useState<BuildingConfig[]>(
-    () => cloneBuildingsConfig(buildings),
-  );
-  const [selectedBuildingId, setSelectedBuildingId] = useState(
-    buildings[0]?.id ?? '',
-  );
-  const [selectedRoomId, setSelectedRoomId] = useState(
-    () => getRoomsForBuilding(buildings[0]?.id ?? '', buildingConfigs)[0]?.id ?? '',
-  );
-  const [showRooms, setShowRooms] = useState(true);
-  const [cameraLocked, setCameraLocked] = useState(true);
+  const [boxes, setBoxes] = useState<BoxConfig[]>(() => cloneBoxesConfig(initialBoxes));
+  const [editingBoxId, setEditingBoxId] = useState<string | null>(null);
+  const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
+  const [editTool, setEditTool] = useState<EditTool>('move');
+  const [cameraLocked, setCameraLocked] = useState(false);
   const [noCache, setNoCache] = useState(startupNoCache);
-  const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
+  const [interactionHint, setInteractionHint] = useState('');
   const [cameraUrl, setCameraUrl] = useState(() =>
     buildUrlWithNoCache(
       startupNoCache,
       buildUrlWithCameraState(startupCameraState),
     ),
   );
-  const showRoomsRef = useRef(showRooms);
-  const cameraLockedRef = useRef(cameraLocked);
-  const selectedRoomRef = useRef(selectedRoomId);
-  const selectedBuildingRef = useRef(selectedBuildingId);
   const cameraStateRef = useRef(defaultCameraState);
+  const boxesRef = useRef(boxes);
   const noCacheRef = useRef(noCache);
+  const editToolRef = useRef<EditTool>(editTool);
+  const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
+
+  const editingBox = editingBoxId ? getBoxById(editingBoxId, boxes) : undefined;
+  const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
 
   const syncUrl = (
     cameraState: CameraState = cameraStateRef.current,
@@ -128,14 +118,6 @@ export default function App() {
     return nextUrl;
   };
 
-  const roomOptions = getRoomsForBuilding(selectedBuildingId, buildingConfigs);
-  const hoveredRoom = hoveredRoomId
-    ? getRoomById(hoveredRoomId, buildingConfigs)
-    : undefined;
-  const selectedRoom = selectedRoomId
-    ? getRoomById(selectedRoomId, buildingConfigs)
-    : undefined;
-
   useEffect(() => {
     syncUrl(defaultCameraState, startupNoCache);
 
@@ -143,24 +125,12 @@ export default function App() {
       if (cameraUrlFrameRef.current !== null) {
         window.cancelAnimationFrame(cameraUrlFrameRef.current);
       }
+
+      if (hintTimeoutRef.current !== null) {
+        window.clearTimeout(hintTimeoutRef.current);
+      }
     };
   }, []);
-
-  useEffect(() => {
-    const nextRoomOptions = getRoomsForBuilding(selectedBuildingId, buildingConfigs);
-
-    if (nextRoomOptions.length === 0) {
-      if (selectedRoomId !== '') {
-        setSelectedRoomId('');
-      }
-
-      return;
-    }
-
-    if (!nextRoomOptions.some((room) => room.id === selectedRoomId)) {
-      setSelectedRoomId(nextRoomOptions[0].id);
-    }
-  }, [buildingConfigs, selectedBuildingId, selectedRoomId]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -178,8 +148,12 @@ export default function App() {
         setErrorMessage('');
 
         controller = await initializeGoogleMapsScene(container, {
-          initialBuildings: buildingConfigs,
+          initialBoxes: boxesRef.current,
           initialCameraState: defaultCameraState,
+          onBoxesChange: (nextBoxes) => {
+            boxesRef.current = nextBoxes;
+            setBoxes(nextBoxes);
+          },
           onCameraStateChange: (cameraState) => {
             cameraStateRef.current = cameraState;
 
@@ -192,12 +166,11 @@ export default function App() {
               cameraUrlFrameRef.current = null;
             });
           },
-          onRoomHovered: (roomId) => {
-            setHoveredRoomId(roomId);
+          onEditingBoxChange: (boxId) => {
+            setEditingBoxId(boxId);
           },
-          onRoomSelected: (roomId) => {
-            setSelectedBuildingId(getBuildingIdFromRoomId(roomId));
-            setSelectedRoomId(roomId);
+          onHoverBoxChange: (boxId) => {
+            setHoveredBoxId(boxId);
           },
         });
 
@@ -207,10 +180,8 @@ export default function App() {
         }
 
         sceneRef.current = controller;
-        controller.setRoomsVisible(showRoomsRef.current);
-        controller.setCameraLocked(cameraLockedRef.current);
-        controller.setSelectedBuilding(selectedBuildingRef.current);
-        controller.setSelectedRoom(selectedRoomRef.current);
+        controller.setEditTool(editToolRef.current);
+        controller.setCameraLocked(cameraLocked);
         setSceneStatus('ready');
       } catch (error) {
         if (!active) {
@@ -239,14 +210,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    showRoomsRef.current = showRooms;
-    sceneRef.current?.setRoomsVisible(showRooms);
-  }, [showRooms]);
-
-  useEffect(() => {
-    cameraLockedRef.current = cameraLocked;
-    sceneRef.current?.setCameraLocked(cameraLocked);
-  }, [cameraLocked]);
+    boxesRef.current = boxes;
+  }, [boxes]);
 
   useEffect(() => {
     noCacheRef.current = noCache;
@@ -254,22 +219,37 @@ export default function App() {
   }, [noCache]);
 
   useEffect(() => {
-    selectedBuildingRef.current = selectedBuildingId;
-    sceneRef.current?.setSelectedBuilding(selectedBuildingId);
-  }, [selectedBuildingId]);
+    editToolRef.current = editTool;
+    sceneRef.current?.setEditTool(editTool);
+  }, [editTool]);
 
   useEffect(() => {
-    selectedRoomRef.current = selectedRoomId;
-    sceneRef.current?.setSelectedRoom(selectedRoomId);
-  }, [selectedRoomId]);
+    sceneRef.current?.setCameraLocked(cameraLocked);
+  }, [cameraLocked]);
+
+  useEffect(() => {
+    sceneRef.current?.setEditingBox(editingBoxId);
+  }, [editingBoxId]);
+
+  const showHint = (message: string): void => {
+    setInteractionHint(message);
+
+    if (hintTimeoutRef.current !== null) {
+      window.clearTimeout(hintTimeoutRef.current);
+    }
+
+    hintTimeoutRef.current = window.setTimeout(() => {
+      setInteractionHint('');
+      hintTimeoutRef.current = null;
+    }, 1800);
+  };
 
   const handleExportLayout = (): void => {
     const snapshot: LayoutSnapshot = {
-      buildings:
-        sceneRef.current?.getBuildingConfigs() ?? cloneBuildingsConfig(buildingConfigs),
+      boxes: sceneRef.current?.getBoxes() ?? cloneBoxesConfig(boxes),
       cameraState: sceneRef.current?.getCameraState() ?? cameraStateRef.current,
       exportedAt: new Date().toISOString(),
-      version: 1,
+      version: 2,
     };
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
       type: 'application/json',
@@ -278,7 +258,7 @@ export default function App() {
     const link = document.createElement('a');
 
     link.href = url;
-    link.download = 'puc-rio-3d-overlay-layout.json';
+    link.download = 'puc-rio-3d-overlay-boxes.json';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -295,27 +275,28 @@ export default function App() {
     try {
       const parsed = JSON.parse(await file.text()) as Partial<LayoutSnapshot>;
 
-      if (!isBuildingConfigArray(parsed.buildings)) {
-        throw new Error('Arquivo sem lista válida de buildings.');
+      if (!isBoxConfigArray(parsed.boxes)) {
+        throw new Error('Arquivo sem lista válida de caixas.');
       }
 
-      const nextBuildings = cloneBuildingsConfig(parsed.buildings);
-
-      setBuildingConfigs(nextBuildings);
-      sceneRef.current?.setBuildingConfigs(nextBuildings);
+      const nextBoxes = cloneBoxesConfig(parsed.boxes);
+      setBoxes(nextBoxes);
+      sceneRef.current?.setBoxes(nextBoxes);
 
       if (isCameraState(parsed.cameraState)) {
-        cameraStateRef.current = parsed.cameraState;
         setDefaultCameraState(parsed.cameraState);
+        cameraStateRef.current = parsed.cameraState;
         sceneRef.current?.setCameraState(parsed.cameraState);
         syncUrl(parsed.cameraState, noCacheRef.current);
       }
+
+      setEditingBoxId(null);
+      setSceneStatus('ready');
+      setErrorMessage('');
     } catch (error) {
       setSceneStatus('error');
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : 'Falha ao importar o layout.',
+        error instanceof Error ? error.message : 'Falha ao importar o layout.',
       );
     } finally {
       event.target.value = '';
@@ -327,19 +308,13 @@ export default function App() {
       <aside className="panel">
         <h1>PUC-Rio 3D Overlay</h1>
         <p className="muted">
-          Google Maps 3D com câmera configurável por URL, blocos arrastáveis por
-          eixo e export/import do layout.
+          Editor de caixas 3D sobre o Google Maps. Use <strong>Alt + clique
+          esquerdo</strong> para inserir uma caixa. Use <strong>clique
+          direito</strong> numa caixa para entrar em edição e clique direito em
+          vazio para sair.
         </p>
 
         <div className="section">
-          <label className="row">
-            <input
-              checked={showRooms}
-              onChange={(event) => setShowRooms(event.target.checked)}
-              type="checkbox"
-            />
-            Mostrar salas
-          </label>
           <label className="row">
             <input
               checked={cameraLocked}
@@ -360,13 +335,10 @@ export default function App() {
 
         <div className="section actionGrid">
           <button onClick={handleExportLayout} type="button">
-            Exportar layout
+            Exportar caixas
           </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            type="button"
-          >
-            Importar layout
+          <button onClick={() => fileInputRef.current?.click()} type="button">
+            Importar caixas
           </button>
           <button
             onClick={() =>
@@ -377,6 +349,16 @@ export default function App() {
             type="button"
           >
             Recarregar
+          </button>
+          <button
+            disabled={!editingBoxId}
+            onClick={() => {
+              setEditingBoxId(null);
+              sceneRef.current?.clearEditingBox();
+            }}
+            type="button"
+          >
+            Sair da edição
           </button>
         </div>
 
@@ -391,79 +373,62 @@ export default function App() {
         />
 
         <div className="section">
-          <label htmlFor="buildingSelect">Bloco</label>
+          <label htmlFor="boxSelect">Caixa</label>
           <select
-            id="buildingSelect"
-            onChange={(event) => {
-              const buildingId = event.target.value;
-              const nextRooms = getRoomsForBuilding(buildingId, buildingConfigs);
-
-              setSelectedBuildingId(buildingId);
-              setSelectedRoomId(nextRooms[0]?.id ?? '');
-            }}
-            value={selectedBuildingId}
+            id="boxSelect"
+            onChange={(event) =>
+              setEditingBoxId(event.target.value ? event.target.value : null)
+            }
+            value={editingBoxId ?? ''}
           >
-            {buildingConfigs.map((building) => (
-              <option key={building.id} value={building.id}>
-                {building.name}
+            <option value="">Nenhuma</option>
+            {boxes.map((box) => (
+              <option key={box.id} value={box.id}>
+                {box.id}
               </option>
             ))}
           </select>
         </div>
 
         <div className="section">
-          <label htmlFor="roomSelect">Sala</label>
+          <label htmlFor="toolSelect">Ferramenta da edição</label>
           <select
-            id="roomSelect"
-            onChange={(event) => setSelectedRoomId(event.target.value)}
-            value={selectedRoomId}
+            disabled={!editingBoxId}
+            id="toolSelect"
+            onChange={(event) => setEditTool(event.target.value as EditTool)}
+            value={editTool}
           >
-            {roomOptions.map((room) => (
-              <option key={room.id} value={room.id}>
-                {room.label}
-              </option>
-            ))}
+            <option value="move">Mover</option>
+            <option value="scale">Escala</option>
           </select>
         </div>
 
         <div className="section legend">
           <div>
-            <span className="dot free" />
-            Livre
-          </div>
-          <div>
-            <span className="dot busy" />
-            Ocupado
-          </div>
-          <div>
-            <span className="dot blocked" />
-            Bloqueado
-          </div>
-          <div>
             <span className="dot selected" />
-            Sala selecionada
+            Caixa em edição
           </div>
           <div>
             <span className="dot hover" />
-            Hover do mouse
+            Hover da caixa
           </div>
           <div>
             <span className="dot axis-x" />
-            Eixo X
+            Handle X
           </div>
           <div>
             <span className="dot axis-y" />
-            Eixo Y
+            Handle Y
           </div>
           <div>
             <span className="dot axis-z" />
-            Eixo Z
+            Handle Z
           </div>
         </div>
 
         <div className="section small">
           <p>
-            <strong>Default de startup</strong>
+            <strong>Startup atual</strong>
             <br />
             Centro: {defaultCameraState.center.lat.toFixed(7)},{' '}
             {defaultCameraState.center.lng.toFixed(7)}
@@ -479,19 +444,13 @@ export default function App() {
             FOV: {defaultCameraState.fov.toFixed(2)}
           </p>
           <p>
-            Para mover um bloco, selecione o prédio e arraste um dos eixos na
-            cena. X e Y movem no plano; Z sobe/desce o bloco inteiro.
+            Zoom com roda do mouse: use <code>Ctrl</code> + scroll.
           </p>
         </div>
 
         <div className="section small">
           <p>
             <strong>URL da câmera</strong>
-            <br />
-            A URL abaixo recebe <code>camLat</code>, <code>camLng</code>,{' '}
-            <code>camAlt</code>, <code>camHeading</code>, <code>camTilt</code>,{' '}
-            <code>camRange</code>, <code>camFov</code> e preserva o{' '}
-            <code>noCache</code>.
           </p>
           <textarea
             className="urlField"
@@ -504,18 +463,21 @@ export default function App() {
 
         <div className="section small roomState">
           <p>
-            <strong>Hover</strong>
+            <strong>Caixas</strong>
             <br />
-            {hoveredRoom
-              ? hoveredRoom.label
-              : 'Passe o mouse sobre uma sala para tentar realce interativo.'}
+            {boxes.length} caixa(s) inserida(s)
           </p>
           <p>
-            <strong>Seleção</strong>
+            <strong>Hover</strong>
             <br />
-            {selectedRoom
-              ? selectedRoom.label
-              : 'Selecione uma sala no painel ou clique sobre a projeção.'}
+            {hoveredBox ? hoveredBox.id : 'Nenhuma'}
+          </p>
+          <p>
+            <strong>Edição</strong>
+            <br />
+            {editingBox
+              ? `${editingBox.id} | pos ${editingBox.position.lat.toFixed(6)}, ${editingBox.position.lng.toFixed(6)}, ${editingBox.position.altitude.toFixed(2)} | escala ${editingBox.scale.x.toFixed(2)} x ${editingBox.scale.y.toFixed(2)} x ${editingBox.scale.z.toFixed(2)}`
+              : 'Clique direito em uma caixa para editar.'}
           </p>
         </div>
 
@@ -528,14 +490,22 @@ export default function App() {
             </strong>
             <p>
               {sceneStatus === 'loading'
-                ? 'Carregando Map3DElement, gizmo de eixo e overlays 3D interativos.'
+                ? 'Carregando mapa 3D e editor de caixas.'
                 : errorMessage}
             </p>
           </div>
         ) : null}
       </aside>
 
-      <main className="viewerShell">
+      <main
+        className="viewerShell"
+        onWheelCapture={(event) => {
+          if (!event.ctrlKey) {
+            showHint('Use Ctrl + scroll para zoom no mapa 3D.');
+          }
+        }}
+      >
+        {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
         <div id="mapContainer" ref={containerRef} />
       </main>
     </div>

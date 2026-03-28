@@ -135,6 +135,23 @@ textarea {
   gap: 8px;
 }
 
+.sliderControl {
+  align-items: center;
+}
+
+.sliderControl strong {
+  justify-self: start;
+  color: #f8fafc;
+  font-size: 0.9rem;
+}
+
+.sliderControl input[type="range"] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: #facc15;
+}
+
 .editorGroup {
   display: grid;
   gap: 8px;

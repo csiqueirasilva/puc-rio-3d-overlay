@@ -9,7 +9,7 @@ import {
   type CameraState,
   type LatLngAltitude,
 } from './cameraUrlState';
-import { getBoxWorldCorners } from './boxMath';
+import { getBoxWorldCorners, pickBoxAtScreenPoint } from './boxMath';
 import { loadGoogleMaps3D } from './googleMapsLoader';
 
 const LOCK_BOUNDS_DELTA = 0.00008;
@@ -91,11 +91,6 @@ type Map3DElementInstance = HTMLElement & {
 
 type LocationClickEvent = Event & {
   position?: LatLngAltitude;
-};
-
-type PointerLikeEvent = Event & {
-  clientX?: number;
-  clientY?: number;
 };
 
 interface BoxRenderMeta {
@@ -356,28 +351,7 @@ export async function initializeGoogleMapsScene(
     emitBoxesChange();
   };
 
-  const handleFaceHoverEnter = (boxId: string) => (event: Event): void => {
-    const pointerEvent = event as PointerLikeEvent;
-
-    if (
-      typeof pointerEvent.clientX === 'number' &&
-      typeof pointerEvent.clientY === 'number'
-    ) {
-      console.log('box-hover-move', {
-        boxId,
-        type: event.type,
-        x: pointerEvent.clientX,
-        y: pointerEvent.clientY,
-      });
-    } else {
-      console.log('box-hover-move', {
-        boxId,
-        type: event.type,
-        x: null,
-        y: null,
-      });
-    }
-
+  const handleFaceHoverEnter = (boxId: string) => (): void => {
     setHoveredBox(boxId);
   };
 
@@ -548,13 +522,17 @@ export async function initializeGoogleMapsScene(
   };
 
   const handleContainerPointerMove = (event: PointerEvent): void => {
-    if (
-      hoveredBoxId &&
-      (event.target === map || event.target === container) &&
-      !selectedBoxId
-    ) {
-      setHoveredBox(null);
-    }
+    const bounds = container.getBoundingClientRect();
+    const nextHoveredBoxId = pickBoxAtScreenPoint(
+      boxes,
+      readCameraState(map, fixedCameraState),
+      bounds.width,
+      bounds.height,
+      event.clientX - bounds.left,
+      event.clientY - bounds.top,
+    );
+
+    setHoveredBox(nextHoveredBoxId);
   };
 
   const handleContainerPointerLeave = (): void => {

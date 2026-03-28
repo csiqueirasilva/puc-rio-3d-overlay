@@ -1,7 +1,15 @@
-import type { LatLngAltitude } from './cameraUrlState';
+import type { CameraState, LatLngAltitude } from './cameraUrlState';
 import type { BoxConfig, Vector3 } from './config';
 
 const METERS_PER_DEGREE_LAT = 111320;
+const BOX_FACE_INDEXES = [
+  [0, 1, 2, 3],
+  [4, 5, 6, 7],
+  [0, 1, 5, 4],
+  [1, 2, 6, 5],
+  [2, 3, 7, 6],
+  [3, 0, 4, 7],
+] as const;
 
 export interface LocalPoint {
   x: number;
@@ -9,8 +17,18 @@ export interface LocalPoint {
   z: number;
 }
 
+export interface ScreenPoint {
+  depth: number;
+  x: number;
+  y: number;
+}
+
 function degreesToRadians(value: number): number {
   return (value * Math.PI) / 180;
+}
+
+function radiansToDegrees(value: number): number {
+  return (value * 180) / Math.PI;
 }
 
 function metersPerDegreeLng(latitude: number): number {
@@ -87,6 +105,57 @@ export function rotateLocalPoint(
   };
 }
 
+export function inverseRotateLocalPoint(
+  point: LocalPoint,
+  rotation: Vector3,
+): LocalPoint {
+  const negativeZ = degreesToRadians(-rotation.z);
+  const negativeY = degreesToRadians(-rotation.y);
+  const negativeX = degreesToRadians(-rotation.x);
+
+  let x = point.x;
+  let y = point.y;
+  let z = point.z;
+
+  const cosZ = Math.cos(negativeZ);
+  const sinZ = Math.sin(negativeZ);
+  const xAfterZ = x * cosZ - y * sinZ;
+  const yAfterZ = x * sinZ + y * cosZ;
+  x = xAfterZ;
+  y = yAfterZ;
+
+  const cosY = Math.cos(negativeY);
+  const sinY = Math.sin(negativeY);
+  const xAfterY = x * cosY + z * sinY;
+  const zAfterY = -x * sinY + z * cosY;
+  x = xAfterY;
+  z = zAfterY;
+
+  const cosX = Math.cos(negativeX);
+  const sinX = Math.sin(negativeX);
+  const yAfterX = y * cosX - z * sinX;
+  const zAfterX = y * sinX + z * cosX;
+
+  return {
+    x,
+    y: yAfterX,
+    z: zAfterX,
+  };
+}
+
+export function getOffsetFromPosition(
+  origin: LatLngAltitude,
+  target: LatLngAltitude,
+): LocalPoint {
+  const averageLat = (origin.lat + target.lat) / 2;
+
+  return {
+    x: (target.lng - origin.lng) * metersPerDegreeLng(averageLat),
+    y: (target.lat - origin.lat) * METERS_PER_DEGREE_LAT,
+    z: target.altitude - origin.altitude,
+  };
+}
+
 export function getBoxLocalCorners(scale: Vector3): LocalPoint[] {
   const halfX = scale.x / 2;
   const halfY = scale.y / 2;
@@ -130,4 +199,211 @@ export function getBoxCentroid(box: BoxConfig): LatLngAltitude {
     lat: sums.lat / corners.length,
     lng: sums.lng / corners.length,
   };
+}
+
+export function getCameraPositionFromState(
+  cameraState: CameraState,
+): LatLngAltitude {
+  const tiltRadians = degreesToRadians(cameraState.tilt);
+  const azimuthRadians = degreesToRadians(cameraState.heading + 180);
+  const horizontalDistance = cameraState.range * Math.sin(tiltRadians);
+  const upDistance = cameraState.range * Math.cos(tiltRadians);
+  const eastDistance = Math.sin(azimuthRadians) * horizontalDistance;
+  const northDistance = Math.cos(azimuthRadians) * horizontalDistance;
+
+  return translatePosition(
+    cameraState.center,
+    eastDistance,
+    northDistance,
+    upDistance,
+  );
+}
+
+export function getCameraStateFromCenterAndPosition(
+  center: LatLngAltitude,
+  cameraPosition: LatLngAltitude,
+  baseCameraState: CameraState,
+): CameraState {
+  const offset = getOffsetFromPosition(center, cameraPosition);
+  const horizontalDistance = Math.hypot(offset.x, offset.y);
+  const range = Math.max(Math.hypot(horizontalDistance, offset.z), 0.0001);
+  const azimuthDegrees = radiansToDegrees(Math.atan2(offset.x, offset.y));
+  const tilt = radiansToDegrees(
+    Math.acos(Math.min(1, Math.max(-1, offset.z / range))),
+  );
+
+  return {
+    center,
+    fov: baseCameraState.fov,
+    heading: normalizeDegrees(azimuthDegrees - 180),
+    range,
+    tilt,
+  };
+}
+
+function getCameraBasis(cameraState: CameraState): {
+  forward: LocalPoint;
+  right: LocalPoint;
+  up: LocalPoint;
+} {
+  const headingRadians = degreesToRadians(cameraState.heading);
+  const tiltRadians = degreesToRadians(cameraState.tilt);
+  const sinHeading = Math.sin(headingRadians);
+  const cosHeading = Math.cos(headingRadians);
+  const sinTilt = Math.sin(tiltRadians);
+  const cosTilt = Math.cos(tiltRadians);
+
+  const forward = {
+    x: sinHeading * sinTilt,
+    y: cosHeading * sinTilt,
+    z: -cosTilt,
+  };
+  const right = {
+    x: cosHeading,
+    y: -sinHeading,
+    z: 0,
+  };
+  const up = {
+    x: right.y * forward.z - right.z * forward.y,
+    y: right.z * forward.x - right.x * forward.z,
+    z: right.x * forward.y - right.y * forward.x,
+  };
+
+  return {
+    forward,
+    right,
+    up,
+  };
+}
+
+function dotProduct(left: LocalPoint, right: LocalPoint): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+function isPointInPolygon(
+  point: { x: number; y: number },
+  polygon: Array<{ x: number; y: number }>,
+): boolean {
+  let inside = false;
+
+  for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index, index += 1) {
+    const current = polygon[index];
+    const previous = polygon[previousIndex];
+    const intersects =
+      current.y > point.y !== previous.y > point.y &&
+      point.x <
+        ((previous.x - current.x) * (point.y - current.y)) /
+          (previous.y - current.y) +
+          current.x;
+
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+export function projectWorldPointToScreen(
+  cameraState: CameraState,
+  worldPoint: LatLngAltitude,
+  viewportWidth: number,
+  viewportHeight: number,
+): ScreenPoint | null {
+  if (viewportWidth <= 0 || viewportHeight <= 0) {
+    return null;
+  }
+
+  const cameraPosition = getCameraPositionFromState(cameraState);
+  const offset = getOffsetFromPosition(cameraPosition, worldPoint);
+  const { forward, right, up } = getCameraBasis(cameraState);
+  const cameraX = dotProduct(offset, right);
+  const cameraY = dotProduct(offset, up);
+  const cameraZ = dotProduct(offset, forward);
+
+  if (cameraZ <= 0.001) {
+    return null;
+  }
+
+  const aspectRatio = viewportWidth / viewportHeight;
+  const tanHalfVerticalFov = Math.tan(degreesToRadians(cameraState.fov) / 2);
+  const tanHalfHorizontalFov = tanHalfVerticalFov * aspectRatio;
+  const normalizedX = cameraX / (cameraZ * tanHalfHorizontalFov);
+  const normalizedY = cameraY / (cameraZ * tanHalfVerticalFov);
+
+  if (
+    !Number.isFinite(normalizedX) ||
+    !Number.isFinite(normalizedY) ||
+    normalizedX < -1.5 ||
+    normalizedX > 1.5 ||
+    normalizedY < -1.5 ||
+    normalizedY > 1.5
+  ) {
+    return null;
+  }
+
+  return {
+    depth: cameraZ,
+    x: ((normalizedX + 1) / 2) * viewportWidth,
+    y: ((1 - normalizedY) / 2) * viewportHeight,
+  };
+}
+
+export function pickBoxAtScreenPoint(
+  boxes: BoxConfig[],
+  cameraState: CameraState,
+  viewportWidth: number,
+  viewportHeight: number,
+  screenX: number,
+  screenY: number,
+): string | null {
+  let closestBoxId: string | null = null;
+  let closestDepth = Number.POSITIVE_INFINITY;
+
+  for (const box of boxes) {
+    const corners = getBoxWorldCorners(box);
+
+    for (const faceIndexes of BOX_FACE_INDEXES) {
+      const projectedFace: ScreenPoint[] = [];
+      let depthSum = 0;
+      let isValidFace = true;
+
+      for (const cornerIndex of faceIndexes) {
+        const projectedPoint = projectWorldPointToScreen(
+          cameraState,
+          corners[cornerIndex],
+          viewportWidth,
+          viewportHeight,
+        );
+
+        if (!projectedPoint) {
+          isValidFace = false;
+          break;
+        }
+
+        projectedFace.push(projectedPoint);
+        depthSum += projectedPoint.depth;
+      }
+
+      if (!isValidFace) {
+        continue;
+      }
+
+      if (
+        isPointInPolygon(
+          { x: screenX, y: screenY },
+          projectedFace.map((point) => ({ x: point.x, y: point.y })),
+        )
+      ) {
+        const averageDepth = depthSum / projectedFace.length;
+
+        if (averageDepth < closestDepth) {
+          closestDepth = averageDepth;
+          closestBoxId = box.id;
+        }
+      }
+    }
+  }
+
+  return closestBoxId;
 }

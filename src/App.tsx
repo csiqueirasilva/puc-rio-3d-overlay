@@ -23,8 +23,13 @@ import {
 } from './config';
 import {
   clampScaleValue,
+  getCameraPositionFromState,
+  getCameraStateFromCenterAndPosition,
   getBoxCentroid,
+  getOffsetFromPosition,
+  inverseRotateLocalPoint,
   normalizeDegrees,
+  rotateLocalPoint,
   translatePosition,
 } from './boxMath';
 import {
@@ -35,9 +40,9 @@ import {
 type SceneStatus = 'loading' | 'ready' | 'error';
 type AxisName = 'x' | 'y' | 'z';
 
-const POSITION_STEP_OPTIONS = [0.25, 1, 5];
-const ROTATION_STEP_OPTIONS = [1, 5, 15];
-const SCALE_STEP_OPTIONS = [0.25, 1, 5];
+const MIN_FOCUS_RANGE = 22;
+const MAX_FOCUS_RANGE = 70;
+const FOCUS_RANGE_MULTIPLIER = 4.5;
 
 interface LayoutSnapshot {
   boxes: BoxConfig[];
@@ -163,6 +168,20 @@ function formatBoxSummary(box: BoxConfig): string {
   return `${box.id} | lat ${box.position.lat.toFixed(6)} | lng ${box.position.lng.toFixed(6)} | alt ${box.position.altitude.toFixed(2)}`;
 }
 
+function formatStepValue(value: number, unit: string): string {
+  return `${value.toFixed(value < 1 ? 2 : 1)} ${unit}`;
+}
+
+function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
+  const largestDimension = Math.max(box.scale.x, box.scale.y, box.scale.z);
+  const targetRange = Math.min(
+    MAX_FOCUS_RANGE,
+    Math.max(MIN_FOCUS_RANGE, largestDimension * FOCUS_RANGE_MULTIPLIER),
+  );
+
+  return Math.min(currentRange, targetRange);
+}
+
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -176,6 +195,7 @@ export default function App() {
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
   const [cameraLocked, setCameraLocked] = useState(false);
+  const [followCameraWithBox, setFollowCameraWithBox] = useState(false);
   const [noCache, setNoCache] = useState(startupNoCache);
   const [positionStep, setPositionStep] = useState(1);
   const [rotationStep, setRotationStep] = useState(5);
@@ -336,6 +356,10 @@ export default function App() {
     const nextCameraState: CameraState = {
       ...(sceneRef.current?.getCameraState() ?? cameraStateRef.current),
       center: getBoxCentroid(selectedBoxFromState),
+      range: getSuggestedFocusRange(
+        selectedBoxFromState,
+        (sceneRef.current?.getCameraState() ?? cameraStateRef.current).range,
+      ),
     };
 
     previousSelectedBoxIdRef.current = selectedBoxId;
@@ -371,16 +395,68 @@ export default function App() {
     }, 1800);
   };
 
+  const syncTrackedCameraForBoxChange = (
+    previousBox: BoxConfig,
+    nextBox: BoxConfig,
+  ): void => {
+    const currentCameraState = sceneRef.current?.getCameraState() ?? cameraStateRef.current;
+    const previousBoxCenter = getBoxCentroid(previousBox);
+    const nextBoxCenter = getBoxCentroid(nextBox);
+    const currentCameraPosition = getCameraPositionFromState(currentCameraState);
+    const centerOffsetLocal = inverseRotateLocalPoint(
+      getOffsetFromPosition(previousBoxCenter, currentCameraState.center),
+      previousBox.rotation,
+    );
+    const cameraOffsetLocal = inverseRotateLocalPoint(
+      getOffsetFromPosition(previousBoxCenter, currentCameraPosition),
+      previousBox.rotation,
+    );
+    const nextCenterOffset = rotateLocalPoint(centerOffsetLocal, nextBox.rotation);
+    const nextCameraOffset = rotateLocalPoint(cameraOffsetLocal, nextBox.rotation);
+    const nextCameraCenter = translatePosition(
+      nextBoxCenter,
+      nextCenterOffset.x,
+      nextCenterOffset.y,
+      nextCenterOffset.z,
+    );
+    const nextCameraPosition = translatePosition(
+      nextBoxCenter,
+      nextCameraOffset.x,
+      nextCameraOffset.y,
+      nextCameraOffset.z,
+    );
+    const nextCameraState = getCameraStateFromCenterAndPosition(
+      nextCameraCenter,
+      nextCameraPosition,
+      currentCameraState,
+    );
+
+    cameraStateRef.current = nextCameraState;
+    setDefaultCameraState(nextCameraState);
+    sceneRef.current?.setCameraState(nextCameraState);
+    syncUrl(nextCameraState, noCacheRef.current);
+  };
+
   const updateSelectedBox = (updater: (box: BoxConfig) => BoxConfig): void => {
     if (!selectedBoxId) {
       return;
     }
 
+    const currentBox = getBoxById(selectedBoxId, boxesRef.current);
+
+    if (!currentBox) {
+      return;
+    }
+
+    const nextBox = updater(cloneBoxConfig(currentBox));
+
     setBoxes((currentBoxes) =>
-      currentBoxes.map((box) =>
-        box.id === selectedBoxId ? updater(cloneBoxConfig(box)) : box,
-      ),
+      currentBoxes.map((box) => (box.id === selectedBoxId ? nextBox : box)),
     );
+
+    if (followCameraWithBox) {
+      syncTrackedCameraForBoxChange(currentBox, nextBox);
+    }
   };
 
   const adjustSelectedPosition = (
@@ -544,6 +620,15 @@ export default function App() {
             />
             No cache no próximo reload
           </label>
+          <label className="row">
+            <input
+              checked={followCameraWithBox}
+              disabled={!selectedBox}
+              onChange={(event) => setFollowCameraWithBox(event.target.checked)}
+              type="checkbox"
+            />
+            Acompanhar camera com a caixa
+          </label>
         </div>
 
         <div className="section actionGrid">
@@ -612,44 +697,41 @@ export default function App() {
         <div className="section">
           <p className="sectionTitle">Passos do editor</p>
           <div className="stepSelectorGrid">
-            <label>
-              Posição
-              <select
+            <label className="sliderControl">
+              <span>Posição</span>
+              <strong>{formatStepValue(positionStep, 'm')}</strong>
+              <input
+                max="10"
+                min="0.05"
                 onChange={(event) => setPositionStep(Number(event.target.value))}
-                value={String(positionStep)}
-              >
-                {POSITION_STEP_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option} m
-                  </option>
-                ))}
-              </select>
+                step="0.05"
+                type="range"
+                value={positionStep}
+              />
             </label>
-            <label>
-              Rotação
-              <select
+            <label className="sliderControl">
+              <span>Rotação</span>
+              <strong>{formatStepValue(rotationStep, 'deg')}</strong>
+              <input
+                max="45"
+                min="0.5"
                 onChange={(event) => setRotationStep(Number(event.target.value))}
-                value={String(rotationStep)}
-              >
-                {ROTATION_STEP_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option} deg
-                  </option>
-                ))}
-              </select>
+                step="0.5"
+                type="range"
+                value={rotationStep}
+              />
             </label>
-            <label>
-              Escala
-              <select
+            <label className="sliderControl">
+              <span>Escala</span>
+              <strong>{formatStepValue(scaleStep, 'm')}</strong>
+              <input
+                max="10"
+                min="0.05"
                 onChange={(event) => setScaleStep(Number(event.target.value))}
-                value={String(scaleStep)}
-              >
-                {SCALE_STEP_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option} m
-                  </option>
-                ))}
-              </select>
+                step="0.05"
+                type="range"
+                value={scaleStep}
+              />
             </label>
           </div>
         </div>

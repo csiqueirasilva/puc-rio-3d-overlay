@@ -23,6 +23,7 @@ import {
 } from './config';
 import {
   clampScaleValue,
+  getBoxCentroid,
   normalizeDegrees,
   translatePosition,
 } from './boxMath';
@@ -195,6 +196,7 @@ export default function App() {
   const cameraStateRef = useRef(defaultCameraState);
   const boxesRef = useRef(boxes);
   const noCacheRef = useRef(noCache);
+  const previousSelectedBoxIdRef = useRef<string | null>(null);
   const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
 
@@ -313,6 +315,35 @@ export default function App() {
   useEffect(() => {
     sceneRef.current?.setSelectedBox(selectedBoxId);
   }, [selectedBoxId]);
+
+  useEffect(() => {
+    if (!selectedBoxId || sceneStatus !== 'ready') {
+      previousSelectedBoxIdRef.current = selectedBoxId;
+      return;
+    }
+
+    if (previousSelectedBoxIdRef.current === selectedBoxId) {
+      return;
+    }
+
+    const selectedBoxFromState = getBoxById(selectedBoxId, boxes);
+
+    if (!selectedBoxFromState) {
+      previousSelectedBoxIdRef.current = selectedBoxId;
+      return;
+    }
+
+    const nextCameraState: CameraState = {
+      ...(sceneRef.current?.getCameraState() ?? cameraStateRef.current),
+      center: getBoxCentroid(selectedBoxFromState),
+    };
+
+    previousSelectedBoxIdRef.current = selectedBoxId;
+    cameraStateRef.current = nextCameraState;
+    setDefaultCameraState(nextCameraState);
+    sceneRef.current?.setCameraState(nextCameraState);
+    syncUrl(nextCameraState, noCacheRef.current);
+  }, [boxes, sceneStatus, selectedBoxId]);
 
   useEffect(() => {
     noCacheRef.current = noCache;

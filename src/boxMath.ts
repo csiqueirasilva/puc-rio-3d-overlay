@@ -109,3 +109,25 @@ export function getBoxWorldCorners(box: BoxConfig): LatLngAltitude[] {
     return translatePosition(box.position, rotated.x, rotated.y, rotated.z);
   });
 }
+
+export function getBoxCentroid(box: BoxConfig): LatLngAltitude {
+  const corners = getBoxWorldCorners(box);
+  const sums = corners.reduce(
+    (accumulator, corner) => ({
+      altitude: accumulator.altitude + corner.altitude,
+      lat: accumulator.lat + corner.lat,
+      lng: accumulator.lng + corner.lng,
+    }),
+    {
+      altitude: 0,
+      lat: 0,
+      lng: 0,
+    },
+  );
+
+  return {
+    altitude: sums.altitude / corners.length,
+    lat: sums.lat / corners.length,
+    lng: sums.lng / corners.length,
+  };
+}

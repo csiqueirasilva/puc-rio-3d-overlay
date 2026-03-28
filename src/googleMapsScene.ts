@@ -93,6 +93,11 @@ type LocationClickEvent = Event & {
   position?: LatLngAltitude;
 };
 
+type PointerLikeEvent = Event & {
+  clientX?: number;
+  clientY?: number;
+};
+
 interface BoxRenderMeta {
   boxId: string;
   edges: PolylineElement[];
@@ -351,7 +356,28 @@ export async function initializeGoogleMapsScene(
     emitBoxesChange();
   };
 
-  const handleFaceHoverEnter = (boxId: string) => (): void => {
+  const handleFaceHoverEnter = (boxId: string) => (event: Event): void => {
+    const pointerEvent = event as PointerLikeEvent;
+
+    if (
+      typeof pointerEvent.clientX === 'number' &&
+      typeof pointerEvent.clientY === 'number'
+    ) {
+      console.log('box-hover-move', {
+        boxId,
+        type: event.type,
+        x: pointerEvent.clientX,
+        y: pointerEvent.clientY,
+      });
+    } else {
+      console.log('box-hover-move', {
+        boxId,
+        type: event.type,
+        x: null,
+        y: null,
+      });
+    }
+
     setHoveredBox(boxId);
   };
 
@@ -444,6 +470,9 @@ export async function initializeGoogleMapsScene(
           }) as PolygonFaceElement;
 
           face.addEventListener('gmp-click', handleFaceClick(box.id));
+          face.addEventListener('mouseover', handleFaceHoverEnter(box.id));
+          face.addEventListener('mousemove', handleFaceHoverEnter(box.id));
+          face.addEventListener('mouseout', handleFaceHoverLeave(box.id));
           face.addEventListener('mouseenter', handleFaceHoverEnter(box.id));
           face.addEventListener('mouseleave', handleFaceHoverLeave(box.id));
           face.addEventListener('pointerenter', handleFaceHoverEnter(box.id));

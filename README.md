@@ -1,13 +1,15 @@
 # PUC-Rio 3D Overlay
 
-Protótipo estático para sobrepor caixas 3D representando salas/ocupação sobre o cenário fotorealista do Google em 3D.
+Protótipo estático em React + TypeScript para sobrepor caixas 3D representando salas/ocupação sobre o cenário fotorealista do Google em 3D.
 
 ## Stack
 
+- React 19
+- TypeScript
 - Vite
 - CesiumJS
 - Google Photorealistic 3D Tiles
-- Deploy estático em Netlify
+- GitHub Pages via GitHub Actions
 
 ## Pré-requisitos
 
@@ -19,20 +21,29 @@ Protótipo estático para sobrepor caixas 3D representando salas/ocupação sobr
 
 ```bash
 npm install
-cp .env.example .env
-# editar .env
+cp .env.example .env.local
+# defina VITE_GOOGLE_MAPS_API_KEY
 npm run dev
 ```
 
-## Deploy no Netlify
+Para desenvolvimento local, o projeto lê `VITE_GOOGLE_MAPS_API_KEY` de `.env.local`. O arquivo `.env.example` já está incluído como referência.
 
-1. Envie esta pasta para um repositório Git.
-2. No Netlify, crie um novo site a partir do repositório.
-3. Defina a variável de ambiente `VITE_GOOGLE_MAPS_API_KEY`.
-4. Build command: `npm run build`
-5. Publish directory: `dist`
+## Deploy no GitHub Pages
 
-O arquivo `netlify.toml` já está pronto.
+1. No repositório do GitHub, vá em `Settings > Pages`.
+2. Em `Build and deployment`, selecione `GitHub Actions`.
+3. Garanta que exista o secret `VITE_GOOGLE_MAPS_API_KEY` em `Settings > Secrets and variables > Actions`.
+4. Faça push para `main` ou `master`.
+5. O workflow `.github/workflows/deploy.yml` vai publicar o conteúdo de `dist` no GitHub Pages.
+
+## Restrição da chave do Google
+
+Mesmo usando secret no Actions, a chave fica embutida no bundle final do frontend. Portanto, trate essa chave como pública e restrinja por HTTP referrer no Google Cloud.
+
+Referrers recomendados:
+
+- `https://<seu-usuario>.github.io/*`
+- `https://<seu-dominio-customizado>/*` se houver domínio próprio
 
 ## O que já existe
 
@@ -46,7 +57,7 @@ O arquivo `netlify.toml` já está pronto.
 
 ## Onde calibrar
 
-Ajuste o array `buildings` em `src/main.js`:
+Ajuste o array `buildings` em `src/config.ts`:
 
 - `lat`, `lon`
 - `baseHeight`

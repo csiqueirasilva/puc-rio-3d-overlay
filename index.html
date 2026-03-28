@@ -4,51 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PUC-Rio 3D Overlay</title>
-    <meta name="description" content="Protótipo para sobreposição de caixas 3D em prédios da PUC-Rio usando CesiumJS + Google Photorealistic 3D Tiles." />
+    <meta
+      name="description"
+      content="Protótipo React + TypeScript para sobreposição de caixas 3D em prédios da PUC-Rio usando CesiumJS + Google Photorealistic 3D Tiles."
+    />
   </head>
   <body>
-    <div id="app">
-      <aside class="panel">
-        <h1>PUC-Rio 3D Overlay</h1>
-        <p class="muted">Protótipo para empilhamento de cubos por sala/andar sobre o contexto 3D do Google.</p>
-
-        <div class="section">
-          <label class="row"><input id="toggleBoxes" type="checkbox" checked /> Mostrar caixas</label>
-          <label class="row"><input id="toggleLabels" type="checkbox" checked /> Mostrar marcadores</label>
-          <label class="row"><input id="toggleTiles" type="checkbox" checked /> Mostrar Google 3D</label>
-          <label class="row"><input id="toggleGhost" type="checkbox" /> Modo raio-X</label>
-        </div>
-
-        <div class="section">
-          <label for="buildingSelect">Bloco</label>
-          <select id="buildingSelect"></select>
-        </div>
-
-        <div class="section inline">
-          <button id="focusBuilding">Focar bloco</button>
-          <button id="focusRoom">Focar sala</button>
-        </div>
-
-        <div class="section">
-          <label for="roomSelect">Sala</label>
-          <select id="roomSelect"></select>
-        </div>
-
-        <div class="section legend">
-          <div><span class="dot free"></span> Livre</div>
-          <div><span class="dot busy"></span> Ocupado</div>
-          <div><span class="dot blocked"></span> Bloqueado</div>
-        </div>
-
-        <div class="section small">
-          <p><strong>Ponto inicial</strong><br />-22.9780191, -43.2316504</p>
-          <p>Edite as definições em <code>src/main.js</code> para alinhar os volumes ao prédio real.</p>
-        </div>
-      </aside>
-
-      <main id="cesiumContainer"></main>
-    </div>
-
-    <script type="module" src="/src/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

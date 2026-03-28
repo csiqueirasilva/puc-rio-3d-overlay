@@ -2,7 +2,7 @@
 
 :root {
   color-scheme: dark;
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   background: #0a0f16;
   color: #edf2f7;
 }
@@ -13,7 +13,9 @@
 
 html,
 body,
-#app,
+#root,
+.layout,
+.viewerShell,
 #cesiumContainer {
   width: 100%;
   height: 100%;
@@ -24,7 +26,7 @@ body {
   overflow: hidden;
 }
 
-#app {
+.layout {
   display: grid;
   grid-template-columns: 360px 1fr;
 }
@@ -55,7 +57,7 @@ body {
   backdrop-filter: blur(8px);
 }
 
-.section.inline {
+.actionGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
@@ -94,6 +96,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button:hover {
   background: rgba(17, 24, 39, 1);
 }
@@ -123,13 +130,27 @@ button:hover {
   background: #f59e0b;
 }
 
-.small {
+.small,
+.statusCard p {
   color: #cbd5e1;
   line-height: 1.45;
 }
 
+.viewerShell,
 #cesiumContainer {
   position: relative;
+}
+
+.statusCard {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.statusCard.loading {
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.statusCard.error {
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .cesium-viewer-toolbar,
@@ -146,7 +167,7 @@ button:hover {
 }
 
 @media (max-width: 980px) {
-  #app {
+  .layout {
     grid-template-columns: 1fr;
     grid-template-rows: 320px 1fr;
   }

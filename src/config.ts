@@ -3,7 +3,8 @@ export type RoomStatus = 'free' | 'busy' | 'blocked';
 export interface InitialView {
   lat: number;
   lon: number;
-  altitude: number;
+  targetHeight: number;
+  range: number;
   heading: number;
   pitch: number;
 }
@@ -16,6 +17,9 @@ export interface BuildingGridConfig {
   cellY: number;
   cellZ: number;
   padding: number;
+  offsetX?: number;
+  offsetY?: number;
+  offsetZ?: number;
 }
 
 export interface BuildingConfig {
@@ -46,20 +50,21 @@ const statusLabels: Record<RoomStatus, string> = {
 };
 
 export const initialView: InitialView = {
-  lat: -22.9780191,
-  lon: -43.2316504,
-  altitude: 145,
-  heading: 209.6,
-  pitch: -26,
+  lat: -22.9779118,
+  lon: -43.231122,
+  targetHeight: 24,
+  range: 96,
+  heading: 217.91,
+  pitch: -21.75,
 };
 
 export const buildings: BuildingConfig[] = [
   {
     id: 'leme-cce-demo',
     name: 'Bloco demo CCE / Biblioteca',
-    lat: -22.9780191,
-    lon: -43.2316504,
-    baseHeight: 21,
+    lat: -22.9779118,
+    lon: -43.231122,
+    baseHeight: 18,
     headingDeg: 118,
     grid: {
       cols: 10,
@@ -69,6 +74,9 @@ export const buildings: BuildingConfig[] = [
       cellY: 5.6,
       cellZ: 3.2,
       padding: 0.88,
+      offsetX: 0,
+      offsetY: 0,
+      offsetZ: 0,
     },
     statusPattern: ['free', 'busy', 'free', 'blocked'],
   },
@@ -126,4 +134,9 @@ export function getRoomsForBuilding(buildingId: string): RoomOption[] {
   }
 
   return rooms;
+}
+
+export function getRoomById(roomId: string): RoomOption | undefined {
+  const buildingId = getBuildingIdFromRoomId(roomId);
+  return getRoomsForBuilding(buildingId).find((room) => room.id === roomId);
 }

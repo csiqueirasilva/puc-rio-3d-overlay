@@ -130,10 +130,26 @@ button:hover {
   background: #f59e0b;
 }
 
+.dot.selected {
+  background: #f8fafc;
+}
+
+.dot.hover {
+  background: #facc15;
+}
+
 .small,
 .statusCard p {
   color: #cbd5e1;
   line-height: 1.45;
+}
+
+.roomState p {
+  margin: 0 0 12px;
+}
+
+.roomState p:last-child {
+  margin-bottom: 0;
 }
 
 .viewerShell,

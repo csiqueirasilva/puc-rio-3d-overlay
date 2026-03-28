@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   buildings,
   getBuildingIdFromRoomId,
+  getRoomById,
   getRoomsForBuilding,
 } from './config';
 import { initializeCesiumScene, type SceneController } from './cesiumScene';
@@ -21,14 +22,18 @@ export default function App() {
   const [showLabels, setShowLabels] = useState(true);
   const [showTiles, setShowTiles] = useState(true);
   const [ghostMode, setGhostMode] = useState(false);
+  const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const showBoxesRef = useRef(showBoxes);
   const showLabelsRef = useRef(showLabels);
   const showTilesRef = useRef(showTiles);
   const ghostModeRef = useRef(ghostMode);
+  const selectedRoomRef = useRef(selectedRoomId);
 
   const roomOptions = getRoomsForBuilding(selectedBuildingId);
+  const hoveredRoom = hoveredRoomId ? getRoomById(hoveredRoomId) : undefined;
+  const selectedRoom = selectedRoomId ? getRoomById(selectedRoomId) : undefined;
 
   useEffect(() => {
     const nextRoomOptions = getRoomsForBuilding(selectedBuildingId);
@@ -62,6 +67,9 @@ export default function App() {
         setErrorMessage('');
 
         controller = await initializeCesiumScene(container, {
+          onRoomHovered: (roomId) => {
+            setHoveredRoomId(roomId);
+          },
           onRoomSelected: (roomId) => {
             setSelectedBuildingId(getBuildingIdFromRoomId(roomId));
             setSelectedRoomId(roomId);
@@ -78,6 +86,7 @@ export default function App() {
         controller.setLabelsVisible(showLabelsRef.current);
         controller.setTilesVisible(showTilesRef.current);
         controller.setGhostMode(ghostModeRef.current);
+        controller.setSelectedRoom(selectedRoomRef.current);
         setSceneStatus('ready');
       } catch (error) {
         if (!active) {
@@ -123,13 +132,19 @@ export default function App() {
     sceneRef.current?.setGhostMode(ghostMode);
   }, [ghostMode]);
 
+  useEffect(() => {
+    selectedRoomRef.current = selectedRoomId;
+    sceneRef.current?.setSelectedRoom(selectedRoomId);
+  }, [selectedRoomId]);
+
   return (
     <div className="layout">
       <aside className="panel">
         <h1>PUC-Rio 3D Overlay</h1>
         <p className="muted">
           Protótipo em React + TypeScript para empilhar cubos por sala/andar
-          sobre o contexto 3D fotorealista do Google.
+          sobre o contexto 3D fotorealista do Google, com hover e seleção de
+          salas.
         </p>
 
         <div className="section">
@@ -239,17 +254,42 @@ export default function App() {
             <span className="dot blocked" />
             Bloqueado
           </div>
+          <div>
+            <span className="dot selected" />
+            Sala selecionada
+          </div>
+          <div>
+            <span className="dot hover" />
+            Hover do mouse
+          </div>
         </div>
 
         <div className="section small">
           <p>
             <strong>Ponto inicial</strong>
             <br />
-            -22.9780191, -43.2316504
+            -22.9779118, -43.231122
           </p>
           <p>
             Ajuste as definições em <code>src/config.ts</code> para alinhar os
-            volumes ao prédio real.
+            volumes ao prédio real, inclusive offsets em metros no grid.
+          </p>
+        </div>
+
+        <div className="section small roomState">
+          <p>
+            <strong>Hover</strong>
+            <br />
+            {hoveredRoom
+              ? hoveredRoom.label
+              : 'Passe o mouse sobre uma caixa para destacar em amarelo.'}
+          </p>
+          <p>
+            <strong>Seleção</strong>
+            <br />
+            {selectedRoom
+              ? selectedRoom.label
+              : 'Selecione uma sala no painel ou clique numa caixa.'}
           </p>
         </div>
 

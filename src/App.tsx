@@ -229,6 +229,7 @@ export default function App() {
   const boxesRef = useRef(boxes);
   const noCacheRef = useRef(noCache);
   const previousSelectedBoxIdRef = useRef<string | null>(null);
+  const pendingFocusBoxIdRef = useRef<string | null>(null);
   const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
 
@@ -304,6 +305,7 @@ export default function App() {
             setHoveredBoxId(boxId);
           },
           onSelectedBoxChange: (boxId) => {
+            pendingFocusBoxIdRef.current = null;
             setSelectedBoxId(boxId);
           },
         });
@@ -366,6 +368,7 @@ export default function App() {
   useEffect(() => {
     if (!selectedBoxId || sceneStatus !== 'ready') {
       previousSelectedBoxIdRef.current = selectedBoxId;
+      pendingFocusBoxIdRef.current = null;
       return;
     }
 
@@ -373,10 +376,16 @@ export default function App() {
       return;
     }
 
+    if (pendingFocusBoxIdRef.current !== selectedBoxId) {
+      previousSelectedBoxIdRef.current = selectedBoxId;
+      return;
+    }
+
     const selectedBoxFromState = getBoxById(selectedBoxId, boxes);
 
     if (!selectedBoxFromState) {
       previousSelectedBoxIdRef.current = selectedBoxId;
+      pendingFocusBoxIdRef.current = null;
       return;
     }
 
@@ -390,6 +399,7 @@ export default function App() {
     };
 
     previousSelectedBoxIdRef.current = selectedBoxId;
+    pendingFocusBoxIdRef.current = null;
     cameraStateRef.current = nextCameraState;
     setDefaultCameraState(nextCameraState);
     sceneRef.current?.setCameraState(nextCameraState);
@@ -730,9 +740,11 @@ export default function App() {
           <div className="inlineActions">
             <select
               id="boxSelect"
-              onChange={(event) =>
-                setSelectedBoxId(event.target.value ? event.target.value : null)
-              }
+              onChange={(event) => {
+                const nextBoxId = event.target.value ? event.target.value : null;
+                pendingFocusBoxIdRef.current = nextBoxId;
+                setSelectedBoxId(nextBoxId);
+              }}
               value={selectedBoxId ?? ''}
             >
               <option value="">Nenhuma</option>
@@ -744,7 +756,10 @@ export default function App() {
             </select>
             <button
               disabled={!selectedBoxId}
-              onClick={() => setSelectedBoxId(null)}
+              onClick={() => {
+                pendingFocusBoxIdRef.current = null;
+                setSelectedBoxId(null);
+              }}
               type="button"
             >
               Limpar

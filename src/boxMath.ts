@@ -90,17 +90,16 @@ export function rotateLocalPoint(
 export function getBoxLocalCorners(scale: Vector3): LocalPoint[] {
   const halfX = scale.x / 2;
   const halfY = scale.y / 2;
-  const halfZ = scale.z / 2;
 
   return [
-    { x: -halfX, y: -halfY, z: -halfZ },
-    { x: halfX, y: -halfY, z: -halfZ },
-    { x: halfX, y: halfY, z: -halfZ },
-    { x: -halfX, y: halfY, z: -halfZ },
-    { x: -halfX, y: -halfY, z: halfZ },
-    { x: halfX, y: -halfY, z: halfZ },
-    { x: halfX, y: halfY, z: halfZ },
-    { x: -halfX, y: halfY, z: halfZ },
+    { x: -halfX, y: -halfY, z: 0 },
+    { x: halfX, y: -halfY, z: 0 },
+    { x: halfX, y: halfY, z: 0 },
+    { x: -halfX, y: halfY, z: 0 },
+    { x: -halfX, y: -halfY, z: scale.z },
+    { x: halfX, y: -halfY, z: scale.z },
+    { x: halfX, y: halfY, z: scale.z },
+    { x: -halfX, y: halfY, z: scale.z },
   ];
 }
 

@@ -45,8 +45,10 @@ const EDGE_INDEXES = [
 ] as const;
 
 type PolygonFaceElement = HTMLElement & {
+  altitudeMode?: string;
   drawsOccludedSegments?: boolean;
   fillColor?: string;
+  geodesic?: boolean;
   outerCoordinates?: Iterable<LatLngAltitude>;
   strokeColor?: string;
   strokeWidth?: number;
@@ -54,8 +56,10 @@ type PolygonFaceElement = HTMLElement & {
 };
 
 type PolylineElement = HTMLElement & {
+  altitudeMode?: string;
   coordinates?: Iterable<LatLngAltitude>;
   drawsOccludedSegments?: boolean;
+  geodesic?: boolean;
   outerColor?: string;
   outerWidth?: number;
   strokeColor?: string;
@@ -228,6 +232,12 @@ function getBoxVisualStyle(
   };
 }
 
+function toReversedCoordinates(
+  coordinates: readonly LatLngAltitude[],
+): LatLngAltitude[] {
+  return [...coordinates].reverse();
+}
+
 export async function initializeGoogleMapsScene(
   container: HTMLElement,
   options: InitializeSceneOptions = {},
@@ -323,7 +333,7 @@ export async function initializeGoogleMapsScene(
     const nextBox: BoxConfig = {
       id: createBoxId(),
       position: {
-        altitude: position.altitude + DEFAULT_BOX_SCALE.z / 2,
+        altitude: position.altitude,
         lat: position.lat,
         lng: position.lng,
       },
@@ -400,8 +410,10 @@ export async function initializeGoogleMapsScene(
 
       for (const [startIndex, endIndex] of EDGE_INDEXES) {
         const edge = new Polyline3DElement({
+          altitudeMode: 'ABSOLUTE',
           coordinates: [corners[startIndex], corners[endIndex]],
           drawsOccludedSegments: true,
+          geodesic: false,
           outerColor: 'rgba(15, 23, 42, 0.82)',
           outerWidth: 1,
           strokeColor: 'rgba(96, 165, 250, 0.92)',
@@ -414,23 +426,32 @@ export async function initializeGoogleMapsScene(
       }
 
       for (const faceIndexes of FACE_INDEXES) {
-        const face = new Polygon3DInteractiveElement({
-          drawsOccludedSegments: true,
-          fillColor: 'rgba(37, 99, 235, 0.18)',
-          outerCoordinates: faceIndexes.map((index) => corners[index]),
-          strokeColor: 'rgba(147, 197, 253, 0.7)',
-          strokeWidth: 2,
-          zIndex: 12,
-        }) as PolygonFaceElement;
+        const faceCoordinates = faceIndexes.map((index) => corners[index]);
 
-        face.addEventListener('gmp-click', handleFaceClick(box.id));
-        face.addEventListener('mouseenter', handleFaceHoverEnter(box.id));
-        face.addEventListener('mouseleave', handleFaceHoverLeave(box.id));
-        face.addEventListener('pointerenter', handleFaceHoverEnter(box.id));
-        face.addEventListener('pointerleave', handleFaceHoverLeave(box.id));
+        for (const coordinates of [
+          faceCoordinates,
+          toReversedCoordinates(faceCoordinates),
+        ]) {
+          const face = new Polygon3DInteractiveElement({
+            altitudeMode: 'ABSOLUTE',
+            drawsOccludedSegments: true,
+            fillColor: 'rgba(37, 99, 235, 0.18)',
+            geodesic: false,
+            outerCoordinates: coordinates,
+            strokeColor: 'rgba(147, 197, 253, 0.7)',
+            strokeWidth: 2,
+            zIndex: 12,
+          }) as PolygonFaceElement;
 
-        meta.faces.push(face);
-        map.append(face);
+          face.addEventListener('gmp-click', handleFaceClick(box.id));
+          face.addEventListener('mouseenter', handleFaceHoverEnter(box.id));
+          face.addEventListener('mouseleave', handleFaceHoverLeave(box.id));
+          face.addEventListener('pointerenter', handleFaceHoverEnter(box.id));
+          face.addEventListener('pointerleave', handleFaceHoverLeave(box.id));
+
+          meta.faces.push(face);
+          map.append(face);
+        }
       }
 
       boxElements.set(box.id, meta);

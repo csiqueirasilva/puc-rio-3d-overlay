@@ -72,17 +72,25 @@ body {
 label,
 .small,
 select,
+textarea,
 code {
   font-size: 0.92rem;
 }
 
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   background: rgba(7, 11, 18, 0.9);
   color: inherit;
   padding: 10px 12px;
+}
+
+textarea {
+  resize: vertical;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  line-height: 1.45;
 }
 
 .legend {
@@ -131,6 +139,10 @@ select {
 .roomState p:last-child,
 .section p:last-child {
   margin-bottom: 0;
+}
+
+.urlField {
+  margin-top: 10px;
 }
 
 .viewerShell,

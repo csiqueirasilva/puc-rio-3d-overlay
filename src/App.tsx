@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  buildUrlWithCameraState,
+  getDefaultCameraState,
+  parseCameraStateFromUrl,
+  replaceUrlWithCameraState,
+  type CameraState,
+} from './cameraUrlState';
+import {
   buildings,
   getBuildingIdFromRoomId,
   getRoomById,
@@ -15,6 +22,9 @@ type SceneStatus = 'loading' | 'ready' | 'error';
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneController | null>(null);
+  const initialCameraStateRef = useRef<CameraState>(
+    parseCameraStateFromUrl() ?? getDefaultCameraState(),
+  );
   const [selectedBuildingId, setSelectedBuildingId] = useState(
     buildings[0]?.id ?? '',
   );
@@ -26,13 +36,29 @@ export default function App() {
   const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
+  const [cameraUrl, setCameraUrl] = useState(() =>
+    buildUrlWithCameraState(initialCameraStateRef.current),
+  );
   const showRoomsRef = useRef(showRooms);
   const cameraLockedRef = useRef(cameraLocked);
   const selectedRoomRef = useRef(selectedRoomId);
+  const cameraStateRef = useRef(initialCameraStateRef.current);
+  const cameraUrlFrameRef = useRef<number | null>(null);
 
   const roomOptions = getRoomsForBuilding(selectedBuildingId);
   const hoveredRoom = hoveredRoomId ? getRoomById(hoveredRoomId) : undefined;
   const selectedRoom = selectedRoomId ? getRoomById(selectedRoomId) : undefined;
+
+  useEffect(() => {
+    const nextUrl = replaceUrlWithCameraState(initialCameraStateRef.current);
+    setCameraUrl(nextUrl);
+
+    return () => {
+      if (cameraUrlFrameRef.current !== null) {
+        window.cancelAnimationFrame(cameraUrlFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const nextRoomOptions = getRoomsForBuilding(selectedBuildingId);
@@ -66,6 +92,20 @@ export default function App() {
         setErrorMessage('');
 
         controller = await initializeGoogleMapsScene(container, {
+          initialCameraState: initialCameraStateRef.current,
+          onCameraStateChange: (cameraState) => {
+            cameraStateRef.current = cameraState;
+
+            if (cameraUrlFrameRef.current !== null) {
+              window.cancelAnimationFrame(cameraUrlFrameRef.current);
+            }
+
+            cameraUrlFrameRef.current = window.requestAnimationFrame(() => {
+              const nextUrl = replaceUrlWithCameraState(cameraStateRef.current);
+              setCameraUrl(nextUrl);
+              cameraUrlFrameRef.current = null;
+            });
+          },
           onRoomHovered: (roomId) => {
             setHoveredRoomId(roomId);
           },
@@ -217,20 +257,41 @@ export default function App() {
           <p>
             <strong>Vista inicial</strong>
             <br />
-            Centro: -22.9779118, -43.231122
+            Centro: {initialCameraStateRef.current.center.lat.toFixed(7)},{' '}
+            {initialCameraStateRef.current.center.lng.toFixed(7)}
             <br />
-            Heading: 217.91
+            Altitude: {initialCameraStateRef.current.center.altitude.toFixed(2)}
             <br />
-            Tilt: 68.25
+            Heading: {initialCameraStateRef.current.heading.toFixed(2)}
             <br />
-            Range: 92
+            Tilt: {initialCameraStateRef.current.tilt.toFixed(2)}
             <br />
-            FOV: 35
+            Range: {initialCameraStateRef.current.range.toFixed(2)}
+            <br />
+            FOV: {initialCameraStateRef.current.fov.toFixed(2)}
           </p>
           <p>
             A grade continua calibrável em <code>src/config.ts</code> via
             heading, baseHeight e offsets em metros.
           </p>
+        </div>
+
+        <div className="section small">
+          <p>
+            <strong>URL da câmera</strong>
+            <br />
+            A URL abaixo recebe os parâmetros <code>camLat</code>,{' '}
+            <code>camLng</code>, <code>camAlt</code>, <code>camHeading</code>,{' '}
+            <code>camTilt</code>, <code>camRange</code> e <code>camFov</code>.
+            Navegue, copie a URL e me cole depois.
+          </p>
+          <textarea
+            className="urlField"
+            onFocus={(event) => event.currentTarget.select()}
+            readOnly
+            rows={4}
+            value={cameraUrl}
+          />
         </div>
 
         <div className="section small roomState">

@@ -1,11 +1,15 @@
 import {
   buildEntityId,
   buildings,
-  initialView,
   patternStatus,
   type BuildingConfig,
   type RoomStatus,
 } from './config';
+import {
+  getDefaultCameraState,
+  type CameraState,
+  type LatLngAltitude,
+} from './cameraUrlState';
 import { loadGoogleMaps3D } from './googleMapsLoader';
 
 const EARTH_RADIUS_METERS = 6_378_137;
@@ -35,20 +39,6 @@ const hoverPalette = {
 const selectedPalette = {
   fill: 'rgba(248, 250, 252, 0.92)',
   stroke: 'rgba(255, 255, 255, 1)',
-};
-
-type LatLngAltitude = {
-  altitude: number;
-  lat: number;
-  lng: number;
-};
-
-type CameraState = {
-  center: LatLngAltitude;
-  fov: number;
-  heading: number;
-  range: number;
-  tilt: number;
 };
 
 type InteractivePolygonElement = HTMLElement & {
@@ -104,6 +94,8 @@ export interface SceneController {
 }
 
 interface InitializeSceneOptions {
+  initialCameraState?: CameraState;
+  onCameraStateChange?: (cameraState: CameraState) => void;
   onRoomHovered?: (roomId: string | null) => void;
   onRoomSelected?: (roomId: string) => void;
 }
@@ -143,26 +135,30 @@ function rotateLocalOffset(
   };
 }
 
-function buildFixedCameraState(): CameraState {
-  return {
-    center: {
-      lat: initialView.lat,
-      lng: initialView.lon,
-      altitude: initialView.centerAltitude,
-    },
-    fov: initialView.fov,
-    heading: initialView.heading,
-    range: initialView.range,
-    tilt: initialView.tilt,
-  };
-}
-
 function applyCameraState(map: Map3DElementInstance, cameraState: CameraState): void {
   map.center = { ...cameraState.center };
   map.fov = cameraState.fov;
   map.heading = cameraState.heading;
   map.range = cameraState.range;
   map.tilt = cameraState.tilt;
+}
+
+function readCameraState(
+  map: Map3DElementInstance,
+  fallbackCameraState: CameraState,
+): CameraState {
+  return {
+    center: {
+      altitude:
+        map.center?.altitude ?? fallbackCameraState.center.altitude,
+      lat: map.center?.lat ?? fallbackCameraState.center.lat,
+      lng: map.center?.lng ?? fallbackCameraState.center.lng,
+    },
+    fov: map.fov ?? fallbackCameraState.fov,
+    heading: map.heading ?? fallbackCameraState.heading,
+    range: map.range ?? fallbackCameraState.range,
+    tilt: map.tilt ?? fallbackCameraState.tilt,
+  };
 }
 
 function applyCameraLock(
@@ -261,25 +257,21 @@ export async function initializeGoogleMapsScene(
 ): Promise<SceneController> {
   const { Map3DElement, Polygon3DInteractiveElement } =
     await loadGoogleMaps3D();
+  const fixedCameraState = options.initialCameraState ?? getDefaultCameraState();
   const map = new Map3DElement({
-    center: {
-      lat: initialView.lat,
-      lng: initialView.lon,
-      altitude: initialView.centerAltitude,
-    },
+    center: fixedCameraState.center,
     defaultUIHidden: true,
-    fov: initialView.fov,
+    fov: fixedCameraState.fov,
     gestureHandling: 'COOPERATIVE',
-    heading: initialView.heading,
+    heading: fixedCameraState.heading,
     mode: 'SATELLITE',
-    range: initialView.range,
-    tilt: initialView.tilt,
+    range: fixedCameraState.range,
+    tilt: fixedCameraState.tilt,
   }) as Map3DElementInstance;
 
   container.replaceChildren();
   container.append(map);
 
-  const fixedCameraState = buildFixedCameraState();
   const roomMap = new Map<string, RoomMeta>();
   let roomsVisible = true;
   let cameraLocked = true;
@@ -366,16 +358,23 @@ export async function initializeGoogleMapsScene(
   const cameraEvents = [
     'gmp-camerapositionchange',
     'gmp-centerchange',
+    'gmp-fovchange',
     'gmp-headingchange',
     'gmp-rangechange',
     'gmp-tiltchange',
   ] as const;
 
+  const handleCameraEvent = (): void => {
+    enforceFixedCamera();
+    options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
+  };
+
   for (const eventName of cameraEvents) {
-    map.addEventListener(eventName, enforceFixedCamera);
+    map.addEventListener(eventName, handleCameraEvent);
   }
 
   applyCameraLock(map, fixedCameraState, cameraLocked);
+  options.onCameraStateChange?.(fixedCameraState);
 
   for (const building of buildings) {
     const { cols, rows, floors } = building.grid;
@@ -441,7 +440,7 @@ export async function initializeGoogleMapsScene(
       container.removeEventListener('pointerleave', handlePointerLeave);
 
       for (const eventName of cameraEvents) {
-        map.removeEventListener(eventName, enforceFixedCamera);
+        map.removeEventListener(eventName, handleCameraEvent);
       }
 
       container.replaceChildren();
@@ -449,6 +448,7 @@ export async function initializeGoogleMapsScene(
     setCameraLocked: (locked: boolean) => {
       cameraLocked = locked;
       applyCameraLock(map, fixedCameraState, locked);
+      options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
     },
     setRoomsVisible: (visible: boolean) => {
       if (roomsVisible === visible) {

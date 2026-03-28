@@ -234,6 +234,11 @@ export default function App() {
 
   const selectedBox = selectedBoxId ? getBoxById(selectedBoxId, boxes) : undefined;
   const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
+  const sortedBoxes = [...boxes].sort((leftBox, rightBox) =>
+    leftBox.name.localeCompare(rightBox.name, 'pt-BR', {
+      sensitivity: 'base',
+    }),
+  );
 
   const syncUrl = (
     cameraState: CameraState = cameraStateRef.current,
@@ -731,7 +736,7 @@ export default function App() {
               value={selectedBoxId ?? ''}
             >
               <option value="">Nenhuma</option>
-              {boxes.map((box) => (
+              {sortedBoxes.map((box) => (
                 <option key={box.id} value={box.id}>
                   {box.name}
                 </option>

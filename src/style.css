@@ -1,9 +1,7 @@
-@import "cesium/Build/Cesium/Widgets/widgets.css";
-
 :root {
   color-scheme: dark;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  background: #0a0f16;
+  background: #09111b;
   color: #edf2f7;
 }
 
@@ -16,7 +14,8 @@ body,
 #root,
 .layout,
 .viewerShell,
-#cesiumContainer {
+#mapContainer,
+#mapContainer > gmp-map-3d {
   width: 100%;
   height: 100%;
   margin: 0;
@@ -34,7 +33,9 @@ body {
 .panel {
   padding: 18px;
   border-right: 1px solid rgba(255, 255, 255, 0.12);
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.98));
   overflow: auto;
 }
 
@@ -57,12 +58,6 @@ body {
   backdrop-filter: blur(8px);
 }
 
-.actionGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
 .row {
   display: flex;
   align-items: center;
@@ -76,33 +71,18 @@ body {
 
 label,
 .small,
-button,
 select,
 code {
   font-size: 0.92rem;
 }
 
-select,
-button {
+select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   background: rgba(7, 11, 18, 0.9);
   color: inherit;
   padding: 10px 12px;
-}
-
-button {
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-button:hover {
-  background: rgba(17, 24, 39, 1);
 }
 
 .legend {
@@ -148,13 +128,19 @@ button:hover {
   margin: 0 0 12px;
 }
 
-.roomState p:last-child {
+.roomState p:last-child,
+.section p:last-child {
   margin-bottom: 0;
 }
 
 .viewerShell,
-#cesiumContainer {
+#mapContainer {
   position: relative;
+  background: #020617;
+}
+
+#mapContainer > gmp-map-3d {
+  display: block;
 }
 
 .statusCard {
@@ -169,23 +155,10 @@ button:hover {
   background: rgba(239, 68, 68, 0.1);
 }
 
-.cesium-viewer-toolbar,
-.cesium-viewer-animationContainer,
-.cesium-viewer-timelineContainer,
-.cesium-viewer-bottom {
-  display: none !important;
-}
-
-.cesium-widget-credits {
-  left: auto !important;
-  right: 10px;
-  bottom: 10px !important;
-}
-
 @media (max-width: 980px) {
   .layout {
     grid-template-columns: 1fr;
-    grid-template-rows: 320px 1fr;
+    grid-template-rows: 380px 1fr;
   }
 
   .panel {

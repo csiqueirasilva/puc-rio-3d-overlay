@@ -1,21 +1,22 @@
 # PUC-Rio 3D Overlay
 
-Protótipo estático em React + TypeScript para sobrepor caixas 3D representando salas/ocupação sobre o cenário fotorealista do Google em 3D.
+Protótipo em React + TypeScript para sobrepor salas interativas sobre o cenário 3D fotorealista do Google Maps.
 
 ## Stack
 
 - React 19
 - TypeScript
 - Vite
-- CesiumJS
-- Google Photorealistic 3D Tiles
-- GitHub Pages via GitHub Actions
+- Google Maps JavaScript API
+- Google Maps 3D (`Map3DElement`, canal `v=beta`)
 
 ## Pré-requisitos
 
-1. Criar uma API key do Google Maps Platform com acesso à Map Tiles API / Photorealistic 3D Tiles.
-2. Restringir a chave por domínio/referrer.
-3. Definir a variável `VITE_GOOGLE_MAPS_API_KEY`.
+1. Criar uma API key do Google Maps Platform.
+2. Habilitar `Maps JavaScript API`.
+3. Garantir acesso aos recursos 3D do Maps JavaScript API.
+4. Restringir a chave por domínio/referrer.
+5. Definir a variável `VITE_GOOGLE_MAPS_API_KEY`.
 
 ## Rodar localmente
 
@@ -26,47 +27,26 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-Para desenvolvimento local, o projeto lê `VITE_GOOGLE_MAPS_API_KEY` de `.env.local`. O arquivo `.env.example` já está incluído como referência.
+## O que existe agora
 
-## Deploy no GitHub Pages
-
-1. No repositório do GitHub, vá em `Settings > Pages`.
-2. Em `Build and deployment > Source`, selecione `GitHub Actions`.
-3. Garanta que exista o secret `VITE_GOOGLE_MAPS_API_KEY` em `Settings > Secrets and variables > Actions`.
-4. Faça push para `main` ou `master`.
-5. O workflow `.github/workflows/deploy.yml` vai publicar o conteúdo de `dist` no GitHub Pages.
-
-Se a URL publicada estiver servindo um `index.html` com `<script type="module" src="/src/main.tsx">`, o GitHub Pages ainda está apontando para a raiz do repositório em vez do artifact gerado pelo workflow.
-
-## Restrição da chave do Google
-
-Mesmo usando secret no Actions, a chave fica embutida no bundle final do frontend. Portanto, trate essa chave como pública e restrinja por HTTP referrer no Google Cloud.
-
-Referrers recomendados:
-
-- `https://<seu-usuario>.github.io/*`
-- `https://<seu-dominio-customizado>/*` se houver domínio próprio
-
-## O que já existe
-
-- Toggle de caixas
-- Toggle de labels/marcadores
-- Toggle do tileset do Google
-- Modo “raio-X” por transparência no tileset
-- Foco em bloco
-- Foco em sala
-- Grade paramétrica de cubos por prédio
+- Mapa 3D nativo do Google
+- Câmera inicial baseada no link de referência
+- Opção de travar a câmera para impedir drift
+- Grade paramétrica de salas por prédio
+- Seleção por clique
+- Hover visual por tentativa de eventos do elemento 3D
 
 ## Onde calibrar
 
-Ajuste o array `buildings` em `src/config.ts`:
+Ajuste o array `buildings` e a `initialView` em `src/config.ts`:
 
 - `lat`, `lon`
 - `baseHeight`
 - `headingDeg`
-- `cols`, `rows`, `floors`
+- `offsetX`, `offsetY`, `offsetZ`
 - `cellX`, `cellY`, `cellZ`
+- `heading`, `tilt`, `range`, `fov`
 
-## Observação importante
+## Limitação importante
 
-Este projeto usa o Google 3D como contexto visual. Não trate a geometria do Google como um asset exportável próprio.
+Esta migração privilegia a câmera nativa do Google Maps 3D. O overlay atual usa polígonos 3D interativos com transparência e oclusão visível, não materiais tipo `depthTest = false` do Cesium.

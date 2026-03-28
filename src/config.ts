@@ -3,10 +3,11 @@ export type RoomStatus = 'free' | 'busy' | 'blocked';
 export interface InitialView {
   lat: number;
   lon: number;
-  targetHeight: number;
-  range: number;
+  centerAltitude: number;
+  fov: number;
   heading: number;
-  pitch: number;
+  range: number;
+  tilt: number;
 }
 
 export interface BuildingGridConfig {
@@ -52,10 +53,11 @@ const statusLabels: Record<RoomStatus, string> = {
 export const initialView: InitialView = {
   lat: -22.9779118,
   lon: -43.231122,
-  targetHeight: 24,
-  range: 96,
+  centerAltitude: 20,
+  fov: 35,
   heading: 217.91,
-  pitch: -21.75,
+  range: 92,
+  tilt: 68.25,
 };
 
 export const buildings: BuildingConfig[] = [

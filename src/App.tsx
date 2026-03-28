@@ -5,7 +5,10 @@ import {
   getRoomById,
   getRoomsForBuilding,
 } from './config';
-import { initializeCesiumScene, type SceneController } from './cesiumScene';
+import {
+  initializeGoogleMapsScene,
+  type SceneController,
+} from './googleMapsScene';
 
 type SceneStatus = 'loading' | 'ready' | 'error';
 
@@ -18,17 +21,13 @@ export default function App() {
   const [selectedRoomId, setSelectedRoomId] = useState(
     () => getRoomsForBuilding(buildings[0]?.id ?? '')[0]?.id ?? '',
   );
-  const [showBoxes, setShowBoxes] = useState(true);
-  const [showLabels, setShowLabels] = useState(true);
-  const [showTiles, setShowTiles] = useState(true);
-  const [ghostMode, setGhostMode] = useState(false);
+  const [showRooms, setShowRooms] = useState(true);
+  const [cameraLocked, setCameraLocked] = useState(true);
   const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
-  const showBoxesRef = useRef(showBoxes);
-  const showLabelsRef = useRef(showLabels);
-  const showTilesRef = useRef(showTiles);
-  const ghostModeRef = useRef(ghostMode);
+  const showRoomsRef = useRef(showRooms);
+  const cameraLockedRef = useRef(cameraLocked);
   const selectedRoomRef = useRef(selectedRoomId);
 
   const roomOptions = getRoomsForBuilding(selectedBuildingId);
@@ -66,7 +65,7 @@ export default function App() {
         setSceneStatus('loading');
         setErrorMessage('');
 
-        controller = await initializeCesiumScene(container, {
+        controller = await initializeGoogleMapsScene(container, {
           onRoomHovered: (roomId) => {
             setHoveredRoomId(roomId);
           },
@@ -82,10 +81,8 @@ export default function App() {
         }
 
         sceneRef.current = controller;
-        controller.setBoxesVisible(showBoxesRef.current);
-        controller.setLabelsVisible(showLabelsRef.current);
-        controller.setTilesVisible(showTilesRef.current);
-        controller.setGhostMode(ghostModeRef.current);
+        controller.setRoomsVisible(showRoomsRef.current);
+        controller.setCameraLocked(cameraLockedRef.current);
         controller.setSelectedRoom(selectedRoomRef.current);
         setSceneStatus('ready');
       } catch (error) {
@@ -95,7 +92,9 @@ export default function App() {
 
         setSceneStatus('error');
         setErrorMessage(
-          error instanceof Error ? error.message : 'Falha ao inicializar a cena 3D.',
+          error instanceof Error
+            ? error.message
+            : 'Falha ao inicializar o mapa 3D do Google.',
         );
       }
     };
@@ -113,24 +112,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    showBoxesRef.current = showBoxes;
-    sceneRef.current?.setBoxesVisible(showBoxes);
-  }, [showBoxes]);
+    showRoomsRef.current = showRooms;
+    sceneRef.current?.setRoomsVisible(showRooms);
+  }, [showRooms]);
 
   useEffect(() => {
-    showLabelsRef.current = showLabels;
-    sceneRef.current?.setLabelsVisible(showLabels);
-  }, [showLabels]);
-
-  useEffect(() => {
-    showTilesRef.current = showTiles;
-    sceneRef.current?.setTilesVisible(showTiles);
-  }, [showTiles]);
-
-  useEffect(() => {
-    ghostModeRef.current = ghostMode;
-    sceneRef.current?.setGhostMode(ghostMode);
-  }, [ghostMode]);
+    cameraLockedRef.current = cameraLocked;
+    sceneRef.current?.setCameraLocked(cameraLocked);
+  }, [cameraLocked]);
 
   useEffect(() => {
     selectedRoomRef.current = selectedRoomId;
@@ -142,43 +131,26 @@ export default function App() {
       <aside className="panel">
         <h1>PUC-Rio 3D Overlay</h1>
         <p className="muted">
-          Protótipo em React + TypeScript para empilhar cubos por sala/andar
-          sobre o contexto 3D fotorealista do Google, com hover e seleção de
-          salas.
+          Migração para o Google Maps 3D nativo, com a câmera travada no
+          enquadramento de referência e salas interativas sobre o prédio.
         </p>
 
         <div className="section">
           <label className="row">
             <input
-              checked={showBoxes}
-              onChange={(event) => setShowBoxes(event.target.checked)}
+              checked={showRooms}
+              onChange={(event) => setShowRooms(event.target.checked)}
               type="checkbox"
             />
-            Mostrar caixas
+            Mostrar salas
           </label>
           <label className="row">
             <input
-              checked={showLabels}
-              onChange={(event) => setShowLabels(event.target.checked)}
+              checked={cameraLocked}
+              onChange={(event) => setCameraLocked(event.target.checked)}
               type="checkbox"
             />
-            Mostrar marcadores
-          </label>
-          <label className="row">
-            <input
-              checked={showTiles}
-              onChange={(event) => setShowTiles(event.target.checked)}
-              type="checkbox"
-            />
-            Mostrar Google 3D
-          </label>
-          <label className="row">
-            <input
-              checked={ghostMode}
-              onChange={(event) => setGhostMode(event.target.checked)}
-              type="checkbox"
-            />
-            Modo raio-X
+            Travar câmera na vista do link
           </label>
         </div>
 
@@ -201,29 +173,6 @@ export default function App() {
               </option>
             ))}
           </select>
-        </div>
-
-        <div className="section actionGrid">
-          <button
-            disabled={sceneStatus !== 'ready' || !selectedBuildingId}
-            onClick={() => sceneRef.current?.focusBuilding(selectedBuildingId)}
-            type="button"
-          >
-            Focar bloco
-          </button>
-          <button
-            disabled={sceneStatus !== 'ready' || !selectedRoomId}
-            onClick={() => {
-              if (!selectedRoomId) {
-                return;
-              }
-
-              void sceneRef.current?.focusRoom(selectedRoomId);
-            }}
-            type="button"
-          >
-            Focar sala
-          </button>
         </div>
 
         <div className="section">
@@ -266,13 +215,21 @@ export default function App() {
 
         <div className="section small">
           <p>
-            <strong>Ponto inicial</strong>
+            <strong>Vista inicial</strong>
             <br />
-            -22.9779118, -43.231122
+            Centro: -22.9779118, -43.231122
+            <br />
+            Heading: 217.91
+            <br />
+            Tilt: 68.25
+            <br />
+            Range: 92
+            <br />
+            FOV: 35
           </p>
           <p>
-            Ajuste as definições em <code>src/config.ts</code> para alinhar os
-            volumes ao prédio real, inclusive offsets em metros no grid.
+            A grade continua calibrável em <code>src/config.ts</code> via
+            heading, baseHeight e offsets em metros.
           </p>
         </div>
 
@@ -282,14 +239,14 @@ export default function App() {
             <br />
             {hoveredRoom
               ? hoveredRoom.label
-              : 'Passe o mouse sobre uma caixa para destacar em amarelo.'}
+              : 'Passe o mouse sobre uma sala para tentar realce interativo.'}
           </p>
           <p>
             <strong>Seleção</strong>
             <br />
             {selectedRoom
               ? selectedRoom.label
-              : 'Selecione uma sala no painel ou clique numa caixa.'}
+              : 'Selecione uma sala no painel ou clique sobre a projeção.'}
           </p>
         </div>
 
@@ -297,12 +254,12 @@ export default function App() {
           <div className={`section statusCard ${sceneStatus}`}>
             <strong>
               {sceneStatus === 'loading'
-                ? 'Inicializando cena 3D'
+                ? 'Inicializando Google Maps 3D'
                 : 'Erro ao carregar o mapa'}
             </strong>
             <p>
               {sceneStatus === 'loading'
-                ? 'Carregando Cesium e o tileset fotorealista do Google.'
+                ? 'Carregando Map3DElement e overlays 3D interativos.'
                 : errorMessage}
             </p>
           </div>
@@ -310,7 +267,7 @@ export default function App() {
       </aside>
 
       <main className="viewerShell">
-        <div id="cesiumContainer" ref={containerRef} />
+        <div id="mapContainer" ref={containerRef} />
       </main>
     </div>
   );

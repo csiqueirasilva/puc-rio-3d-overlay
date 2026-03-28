@@ -266,6 +266,20 @@ textarea {
   pointer-events: none;
 }
 
+.hoverTooltip {
+  position: absolute;
+  z-index: 31;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  color: #fef08a;
+  font-size: 0.88rem;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .statusCard {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import {
   buildNoCacheReloadUrl,
   buildUrlWithCameraState,
@@ -159,6 +165,7 @@ function formatBoxSummary(box: BoxConfig): string {
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const viewerShellRef = useRef<HTMLElement | null>(null);
   const sceneRef = useRef<SceneController | null>(null);
   const startupCameraState = parseCameraStateFromUrl() ?? getDefaultCameraState();
   const startupNoCache = parseNoCacheFromUrl();
@@ -175,6 +182,10 @@ export default function App() {
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [interactionHint, setInteractionHint] = useState('');
+  const [hoverTooltipPosition, setHoverTooltipPosition] = useState({
+    x: 18,
+    y: 18,
+  });
   const [cameraUrl, setCameraUrl] = useState(() =>
     buildUrlWithNoCache(
       startupNoCache,
@@ -455,6 +466,23 @@ export default function App() {
     } finally {
       event.target.value = '';
     }
+  };
+
+  const handleViewerPointerMove = (
+    event: ReactPointerEvent<HTMLElement>,
+  ): void => {
+    const viewerElement = viewerShellRef.current;
+
+    if (!viewerElement) {
+      return;
+    }
+
+    const bounds = viewerElement.getBoundingClientRect();
+
+    setHoverTooltipPosition({
+      x: event.clientX - bounds.left + 14,
+      y: event.clientY - bounds.top + 14,
+    });
   };
 
   return (
@@ -772,13 +800,27 @@ export default function App() {
 
       <main
         className="viewerShell"
+        onPointerMove={handleViewerPointerMove}
+        onPointerLeave={() => setHoveredBoxId(null)}
         onWheelCapture={(event) => {
           if (!event.ctrlKey) {
             showHint('Use Ctrl + scroll para zoom no mapa 3D.');
           }
         }}
+        ref={viewerShellRef}
       >
         {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
+        {hoveredBox ? (
+          <div
+            className="hoverTooltip"
+            style={{
+              left: `${hoverTooltipPosition.x}px`,
+              top: `${hoverTooltipPosition.y}px`,
+            }}
+          >
+            {hoveredBox.id}
+          </div>
+        ) : null}
         <div id="mapContainer" ref={containerRef} />
       </main>
     </div>

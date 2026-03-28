@@ -20,10 +20,10 @@ Protótipo estático em React + TypeScript para sobrepor caixas 3D representando
 ## Rodar localmente
 
 ```bash
-npm install
+pnpm install
 cp .env.example .env.local
 # defina VITE_GOOGLE_MAPS_API_KEY
-npm run dev
+pnpm dev
 ```
 
 Para desenvolvimento local, o projeto lê `VITE_GOOGLE_MAPS_API_KEY` de `.env.local`. O arquivo `.env.example` já está incluído como referência.
@@ -31,10 +31,12 @@ Para desenvolvimento local, o projeto lê `VITE_GOOGLE_MAPS_API_KEY` de `.env.lo
 ## Deploy no GitHub Pages
 
 1. No repositório do GitHub, vá em `Settings > Pages`.
-2. Em `Build and deployment`, selecione `GitHub Actions`.
+2. Em `Build and deployment > Source`, selecione `GitHub Actions`.
 3. Garanta que exista o secret `VITE_GOOGLE_MAPS_API_KEY` em `Settings > Secrets and variables > Actions`.
 4. Faça push para `main` ou `master`.
 5. O workflow `.github/workflows/deploy.yml` vai publicar o conteúdo de `dist` no GitHub Pages.
+
+Se a URL publicada estiver servindo um `index.html` com `<script type="module" src="/src/main.tsx">`, o GitHub Pages ainda está apontando para a raiz do repositório em vez do artifact gerado pelo workflow.
 
 ## Restrição da chave do Google
 

@@ -125,6 +125,10 @@ textarea {
   gap: 8px;
 }
 
+.inlineActions > .sectionTitle {
+  align-self: center;
+}
+
 .stepSelectorGrid {
   display: grid;
   gap: 12px;
@@ -295,6 +299,45 @@ textarea {
   line-height: 1;
   pointer-events: none;
   white-space: nowrap;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 23, 0.62);
+  padding: 20px;
+}
+
+.modalCard {
+  width: min(100%, 420px);
+  padding: 18px;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top left, rgba(250, 204, 21, 0.12), transparent 35%),
+    rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
+}
+
+.modalCard h2 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+}
+
+.modalField {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.modalActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .statusCard {

@@ -43,6 +43,7 @@ type AxisName = 'x' | 'y' | 'z';
 const MIN_FOCUS_RANGE = 22;
 const MAX_FOCUS_RANGE = 70;
 const FOCUS_RANGE_MULTIPLIER = 4.5;
+const FOCUS_RANGE_DISTANCE_MULTIPLIER = 3;
 
 interface LayoutSnapshot {
   boxes: BoxConfig[];
@@ -133,6 +134,10 @@ function parseBoxConfigArray(value: unknown): BoxConfig[] | null {
 
     parsedBoxes.push({
       id: candidate.id,
+      name:
+        typeof candidate.name === 'string' && candidate.name.trim()
+          ? candidate.name.trim()
+          : candidate.id,
       position: {
         altitude: position.altitude,
         lat: position.lat,
@@ -165,7 +170,7 @@ function parseBoxConfigArray(value: unknown): BoxConfig[] | null {
 }
 
 function formatBoxSummary(box: BoxConfig): string {
-  return `${box.id} | lat ${box.position.lat.toFixed(6)} | lng ${box.position.lng.toFixed(6)} | alt ${box.position.altitude.toFixed(2)}`;
+  return `${box.name} | lat ${box.position.lat.toFixed(6)} | lng ${box.position.lng.toFixed(6)} | alt ${box.position.altitude.toFixed(2)}`;
 }
 
 function formatStepValue(value: number, unit: string): string {
@@ -175,8 +180,13 @@ function formatStepValue(value: number, unit: string): string {
 function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   const largestDimension = Math.max(box.scale.x, box.scale.y, box.scale.z);
   const targetRange = Math.min(
-    MAX_FOCUS_RANGE,
-    Math.max(MIN_FOCUS_RANGE, largestDimension * FOCUS_RANGE_MULTIPLIER),
+    MAX_FOCUS_RANGE * FOCUS_RANGE_DISTANCE_MULTIPLIER,
+    Math.max(
+      MIN_FOCUS_RANGE * FOCUS_RANGE_DISTANCE_MULTIPLIER,
+      largestDimension *
+        FOCUS_RANGE_MULTIPLIER *
+        FOCUS_RANGE_DISTANCE_MULTIPLIER,
+    ),
   );
 
   return Math.min(currentRange, targetRange);
@@ -203,6 +213,8 @@ export default function App() {
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [interactionHint, setInteractionHint] = useState('');
+  const [isNameModalOpen, setIsNameModalOpen] = useState(false);
+  const [pendingBoxName, setPendingBoxName] = useState('');
   const [hoverTooltipPosition, setHoverTooltipPosition] = useState({
     x: 18,
     y: 18,
@@ -337,6 +349,16 @@ export default function App() {
   }, [selectedBoxId]);
 
   useEffect(() => {
+    if (!selectedBox) {
+      setIsNameModalOpen(false);
+      setPendingBoxName('');
+      return;
+    }
+
+    setPendingBoxName(selectedBox.name);
+  }, [selectedBox]);
+
+  useEffect(() => {
     if (!selectedBoxId || sceneStatus !== 'ready') {
       previousSelectedBoxIdRef.current = selectedBoxId;
       return;
@@ -466,13 +488,21 @@ export default function App() {
     const delta = positionStep * direction;
 
     updateSelectedBox((box) => {
-      if (axis === 'x') {
-        box.position = translatePosition(box.position, delta, 0, 0);
-      } else if (axis === 'y') {
-        box.position = translatePosition(box.position, 0, delta, 0);
-      } else {
-        box.position = translatePosition(box.position, 0, 0, delta);
-      }
+      const localOffset = rotateLocalPoint(
+        {
+          x: axis === 'x' ? delta : 0,
+          y: axis === 'y' ? delta : 0,
+          z: axis === 'z' ? delta : 0,
+        },
+        box.rotation,
+      );
+
+      box.position = translatePosition(
+        box.position,
+        localOffset.x,
+        localOffset.y,
+        localOffset.z,
+      );
 
       return box;
     });
@@ -514,6 +544,29 @@ export default function App() {
     );
     setSelectedBoxId(null);
     setHoveredBoxId(null);
+  };
+
+  const handleOpenNameModal = (): void => {
+    if (!selectedBox) {
+      return;
+    }
+
+    setPendingBoxName(selectedBox.name);
+    setIsNameModalOpen(true);
+  };
+
+  const handleSaveBoxName = (): void => {
+    const nextName = pendingBoxName.trim();
+
+    if (!selectedBox || !nextName) {
+      return;
+    }
+
+    updateSelectedBox((box) => {
+      box.name = nextName;
+      return box;
+    });
+    setIsNameModalOpen(false);
   };
 
   const handleExportLayout = (): void => {
@@ -680,7 +733,7 @@ export default function App() {
               <option value="">Nenhuma</option>
               {boxes.map((box) => (
                 <option key={box.id} value={box.id}>
-                  {box.id}
+                  {box.name}
                 </option>
               ))}
             </select>
@@ -738,11 +791,17 @@ export default function App() {
 
         {selectedBox ? (
           <div className="section">
-            <p className="sectionTitle">Editar {selectedBox.id}</p>
+            <div className="inlineActions">
+              <p className="sectionTitle">Editar {selectedBox.name}</p>
+              <button onClick={handleOpenNameModal} type="button">
+                Editar nome
+              </button>
+            </div>
             <p className="small">
-              Eixos de posição: <code>X</code> leste/oeste, <code>Y</code>{' '}
-              norte/sul, <code>Z</code> altitude. Os botões usam o passo em
-              metros; a leitura abaixo continua geográfica.
+              Translação local da caixa: <code>X</code>, <code>Y</code> e{' '}
+              <code>Z</code> seguem a rotação atual do próprio objeto. Os
+              botões usam o passo em metros; a leitura abaixo continua
+              geográfica.
             </p>
 
             <div className="editorGroup">
@@ -826,6 +885,8 @@ export default function App() {
             <p className="sectionTitle">Hover</p>
             <p>{formatBoxSummary(hoveredBox)}</p>
             <p>
+              Id: {hoveredBox.id}
+              <br />
               Rotação: {hoveredBox.rotation.x.toFixed(1)} /{' '}
               {hoveredBox.rotation.y.toFixed(1)} /{' '}
               {hoveredBox.rotation.z.toFixed(1)}
@@ -886,12 +947,12 @@ export default function App() {
           <p>
             <strong>Selecionada</strong>
             <br />
-            {selectedBox ? selectedBox.id : 'Nenhuma'}
+            {selectedBox ? selectedBox.name : 'Nenhuma'}
           </p>
           <p>
             <strong>Hover</strong>
             <br />
-            {hoveredBox ? hoveredBox.id : 'Nenhuma'}
+            {hoveredBox ? hoveredBox.name : 'Nenhuma'}
           </p>
         </div>
 
@@ -931,11 +992,61 @@ export default function App() {
               top: `${hoverTooltipPosition.y}px`,
             }}
           >
-            {hoveredBox.id}
+            {hoveredBox.name}
           </div>
         ) : null}
         <div id="mapContainer" ref={containerRef} />
       </main>
+      {isNameModalOpen && selectedBox ? (
+        <div
+          className="modalBackdrop"
+          onClick={() => setIsNameModalOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="modalCard"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-box-name-title"
+          >
+            <h2 id="edit-box-name-title">Editar nome da caixa</h2>
+            <p className="small">
+              Id interno: <code>{selectedBox.id}</code>
+            </p>
+            <label className="modalField">
+              Nome
+              <input
+                autoFocus
+                onChange={(event) => setPendingBoxName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    handleSaveBoxName();
+                  }
+
+                  if (event.key === 'Escape') {
+                    setIsNameModalOpen(false);
+                  }
+                }}
+                type="text"
+                value={pendingBoxName}
+              />
+            </label>
+            <div className="modalActions">
+              <button onClick={() => setIsNameModalOpen(false)} type="button">
+                Cancelar
+              </button>
+              <button
+                disabled={!pendingBoxName.trim()}
+                onClick={handleSaveBoxName}
+                type="button"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

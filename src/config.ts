@@ -16,6 +16,7 @@ export interface Vector3 {
 
 export interface BoxConfig {
   id: string;
+  name: string;
   position: {
     altitude: number;
     lat: number;
@@ -39,6 +40,10 @@ export const initialBoxes: BoxConfig[] = [];
 
 export function createBoxId(): string {
   return `box-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+}
+
+export function createBoxName(sourceBoxes: BoxConfig[] = initialBoxes): string {
+  return `Caixa ${sourceBoxes.length + 1}`;
 }
 
 export function cloneBoxConfig(box: BoxConfig): BoxConfig {

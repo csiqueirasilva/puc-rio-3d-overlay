@@ -1,4 +1,5 @@
 import {
+  createBoxName,
   createBoxId,
   cloneBoxesConfig,
   getBoxById,
@@ -332,6 +333,7 @@ export async function initializeGoogleMapsScene(
   const createBoxAtPosition = (position: LatLngAltitude): void => {
     const nextBox: BoxConfig = {
       id: createBoxId(),
+      name: createBoxName(boxes),
       position: {
         altitude: position.altitude,
         lat: position.lat,

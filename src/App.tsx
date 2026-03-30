@@ -42,6 +42,7 @@ type SceneStatus = 'loading' | 'ready' | 'error';
 type AxisName = 'x' | 'y' | 'z';
 
 interface ContextMenuState {
+  targetBoxId: string | null;
   x: number;
   y: number;
 }
@@ -244,6 +245,9 @@ export default function App() {
 
   const selectedBox = selectedBoxId ? getBoxById(selectedBoxId, boxes) : undefined;
   const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
+  const contextMenuTargetBox = contextMenuState?.targetBoxId
+    ? getBoxById(contextMenuState.targetBoxId, boxes)
+    : undefined;
   const sortedBoxes = [...boxes].sort((leftBox, rightBox) =>
     leftBox.name.localeCompare(rightBox.name, 'pt-BR', {
       sensitivity: 'base',
@@ -596,6 +600,7 @@ export default function App() {
     const bounds = viewerElement.getBoundingClientRect();
 
     setContextMenuState({
+      targetBoxId: hoveredBoxId,
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
@@ -604,7 +609,29 @@ export default function App() {
   const handleArmBoxPlacement = (): void => {
     sceneRef.current?.armBoxPlacement();
     setContextMenuState(null);
-    showHint('Clique esquerdo no mapa para posicionar a nova sala.');
+    showHint('Clique esquerdo no mapa para posicionar o novo espaço.');
+  };
+
+  const handleRemoveContextTargetBox = (): void => {
+    const targetBoxId = contextMenuState?.targetBoxId;
+
+    if (!targetBoxId) {
+      return;
+    }
+
+    setBoxes((currentBoxes) =>
+      currentBoxes.filter((box) => box.id !== targetBoxId),
+    );
+
+    if (selectedBoxId === targetBoxId) {
+      setSelectedBoxId(null);
+    }
+
+    if (hoveredBoxId === targetBoxId) {
+      setHoveredBoxId(null);
+    }
+
+    setContextMenuState(null);
   };
 
   const handleSaveBoxName = (): void => {
@@ -654,7 +681,7 @@ export default function App() {
       const nextBoxes = parseBoxConfigArray(parsed.boxes);
 
       if (!nextBoxes) {
-        throw new Error('Arquivo sem lista válida de caixas.');
+        throw new Error('Arquivo sem lista válida de espaços.');
       }
 
       setBoxes(cloneBoxesConfig(nextBoxes));
@@ -703,9 +730,9 @@ export default function App() {
         <h1>PUC-Rio 3D Overlay</h1>
         <p className="muted">
           Use <strong>clique direito</strong> no mapa para abrir o menu de
-          contexto e escolher <strong>Adicionar sala</strong>. Depois, use{' '}
-          <strong>clique esquerdo</strong> para posicionar a caixa. Clique
-          esquerdo também continua selecionando caixas já existentes.
+          contexto e escolher <strong>Adicionar espaço</strong>. Depois, use{' '}
+          <strong>clique esquerdo</strong> para posicionar o espaço. Clique
+          esquerdo também continua selecionando espaços existentes.
         </p>
 
         <div className="section">
@@ -732,16 +759,16 @@ export default function App() {
               onChange={(event) => setFollowCameraWithBox(event.target.checked)}
               type="checkbox"
             />
-            Acompanhar camera com a caixa
+            Acompanhar câmera com o espaço
           </label>
         </div>
 
         <div className="section actionGrid">
           <button onClick={handleExportLayout} type="button">
-            Exportar caixas
+            Exportar espaços
           </button>
           <button onClick={() => fileInputRef.current?.click()} type="button">
-            Importar caixas
+            Importar espaços
           </button>
           <button
             onClick={() =>
@@ -758,7 +785,7 @@ export default function App() {
             onClick={handleDeleteSelectedBox}
             type="button"
           >
-            Remover caixa selecionada
+            Remover espaço selecionado
           </button>
         </div>
 
@@ -773,7 +800,7 @@ export default function App() {
         />
 
         <div className="section">
-          <label htmlFor="boxSelect">Caixa selecionada</label>
+          <label htmlFor="boxSelect">Espaço selecionado</label>
           <div className="inlineActions">
             <select
               id="boxSelect"
@@ -849,13 +876,13 @@ export default function App() {
         {selectedBox ? (
           <div className="section">
             <div className="inlineActions">
-              <p className="sectionTitle">Editar {selectedBox.name}</p>
-              <button onClick={handleOpenNameModal} type="button">
-                Editar nome
-              </button>
+            <p className="sectionTitle">Editar {selectedBox.name}</p>
+            <button onClick={handleOpenNameModal} type="button">
+              Editar nome
+            </button>
             </div>
             <p className="small">
-              Translação local da caixa: <code>X</code>, <code>Y</code> e{' '}
+              Translação local do espaço: <code>X</code>, <code>Y</code> e{' '}
               <code>Z</code> seguem a rotação atual do próprio objeto. Os
               botões usam o passo em metros; a leitura abaixo continua
               geográfica.
@@ -956,7 +983,7 @@ export default function App() {
         ) : (
           <div className="section roomState">
             <p className="sectionTitle">Editor</p>
-            <p>Selecione uma caixa para editar ou passe o mouse por uma caixa para inspecionar.</p>
+            <p>Selecione um espaço para editar ou passe o mouse por um espaço para inspecionar.</p>
           </div>
         )}
 
@@ -997,9 +1024,9 @@ export default function App() {
 
         <div className="section small roomState">
           <p>
-            <strong>Caixas</strong>
+            <strong>Espaços</strong>
             <br />
-            {boxes.length} caixa(s)
+            {boxes.length} espaço(s)
           </p>
           <p>
             <strong>Selecionada</strong>
@@ -1022,7 +1049,7 @@ export default function App() {
             </strong>
             <p>
               {sceneStatus === 'loading'
-                ? 'Carregando mapa 3D e editor de caixas.'
+                ? 'Carregando mapa 3D e editor de espaços.'
                 : errorMessage}
             </p>
           </div>
@@ -1048,7 +1075,7 @@ export default function App() {
       >
         {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
         {isBoxPlacementArmed ? (
-          <div className="placementBadge">Adicionar sala: clique no mapa</div>
+          <div className="placementBadge">Adicionar espaço: clique no mapa</div>
         ) : null}
         {hoveredBox ? (
           <div
@@ -1071,8 +1098,13 @@ export default function App() {
             }}
           >
             <button onClick={handleArmBoxPlacement} type="button">
-              Adicionar sala
+              Adicionar espaço
             </button>
+            {contextMenuTargetBox ? (
+              <button onClick={handleRemoveContextTargetBox} type="button">
+                Remover {contextMenuTargetBox.name}
+              </button>
+            ) : null}
           </div>
         ) : null}
         <div id="mapContainer" ref={containerRef} />
@@ -1090,7 +1122,7 @@ export default function App() {
             aria-modal="true"
             aria-labelledby="edit-box-name-title"
           >
-            <h2 id="edit-box-name-title">Editar nome da caixa</h2>
+            <h2 id="edit-box-name-title">Editar nome do espaço</h2>
             <p className="small">
               Id interno: <code>{selectedBox.id}</code>
             </p>

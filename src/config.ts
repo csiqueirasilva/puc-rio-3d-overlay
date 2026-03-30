@@ -43,7 +43,7 @@ export function createBoxId(): string {
 }
 
 export function createBoxName(sourceBoxes: BoxConfig[] = initialBoxes): string {
-  return `Caixa ${sourceBoxes.length + 1}`;
+  return `Espaço ${sourceBoxes.length + 1}`;
 }
 
 export function cloneBoxConfig(box: BoxConfig): BoxConfig {

@@ -301,6 +301,34 @@ textarea {
   white-space: nowrap;
 }
 
+.placementBadge {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 31;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(250, 204, 21, 0.28);
+  color: #fde68a;
+  pointer-events: none;
+}
+
+.contextMenu {
+  position: absolute;
+  z-index: 32;
+  min-width: 180px;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
+}
+
+.contextMenu button {
+  text-align: left;
+}
+
 .modalBackdrop {
   position: fixed;
   inset: 0;

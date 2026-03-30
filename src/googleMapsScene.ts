@@ -101,6 +101,8 @@ interface BoxRenderMeta {
 }
 
 export interface SceneController {
+  armBoxPlacement: () => void;
+  clearBoxPlacement: () => void;
   destroy: () => void;
   getCameraState: () => CameraState;
   getBoxes: () => BoxConfig[];
@@ -117,6 +119,7 @@ interface InitializeSceneOptions {
   onBoxesChange?: (boxes: BoxConfig[]) => void;
   onCameraStateChange?: (cameraState: CameraState) => void;
   onHoverBoxChange?: (boxId: string | null) => void;
+  onPlacementModeChange?: (armed: boolean) => void;
   onSelectedBoxChange?: (boxId: string | null) => void;
 }
 
@@ -252,6 +255,7 @@ export async function initializeGoogleMapsScene(
   let boxes = cloneBoxesConfig(options.initialBoxes ?? []);
   let selectedBoxId = options.initialSelectedBoxId ?? null;
   let hoveredBoxId: string | null = null;
+  let boxPlacementArmed = false;
   let cameraLocked = false;
   let enforcingCamera = false;
 
@@ -313,6 +317,15 @@ export async function initializeGoogleMapsScene(
     updateBoxStyles();
   };
 
+  const setBoxPlacementArmed = (armed: boolean): void => {
+    if (boxPlacementArmed === armed) {
+      return;
+    }
+
+    boxPlacementArmed = armed;
+    options.onPlacementModeChange?.(armed);
+  };
+
   const setSelectedBoxInternal = (
     boxId: string | null,
     emitChange: boolean,
@@ -371,8 +384,9 @@ export async function initializeGoogleMapsScene(
 
     const clickEvent = event as LocationClickEvent;
 
-    if (altPressedRef.current && clickEvent.position) {
+    if ((altPressedRef.current || boxPlacementArmed) && clickEvent.position) {
       createBoxAtPosition(clickEvent.position);
+      setBoxPlacementArmed(false);
       return;
     }
 
@@ -468,9 +482,10 @@ export async function initializeGoogleMapsScene(
   const handleMapClick = (event: Event): void => {
     const clickEvent = event as LocationClickEvent;
 
-    if (altPressedRef.current && clickEvent.position) {
+    if ((altPressedRef.current || boxPlacementArmed) && clickEvent.position) {
       event.preventDefault();
       createBoxAtPosition(clickEvent.position);
+      setBoxPlacementArmed(false);
       return;
     }
 
@@ -567,6 +582,12 @@ export async function initializeGoogleMapsScene(
   syncCameraState();
 
   return {
+    armBoxPlacement: () => {
+      setBoxPlacementArmed(true);
+    },
+    clearBoxPlacement: () => {
+      setBoxPlacementArmed(false);
+    },
     destroy: () => {
       for (const eventName of cameraEvents) {
         map.removeEventListener(eventName, handleCameraEvent);

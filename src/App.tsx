@@ -3,6 +3,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
@@ -39,6 +40,11 @@ import {
 
 type SceneStatus = 'loading' | 'ready' | 'error';
 type AxisName = 'x' | 'y' | 'z';
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+}
 
 const MIN_FOCUS_RANGE = 22;
 const MAX_FOCUS_RANGE = 70;
@@ -215,6 +221,9 @@ export default function App() {
   const [interactionHint, setInteractionHint] = useState('');
   const [isNameModalOpen, setIsNameModalOpen] = useState(false);
   const [pendingBoxName, setPendingBoxName] = useState('');
+  const [isBoxPlacementArmed, setIsBoxPlacementArmed] = useState(false);
+  const [contextMenuState, setContextMenuState] =
+    useState<ContextMenuState | null>(null);
   const [hoverTooltipPosition, setHoverTooltipPosition] = useState({
     x: 18,
     y: 18,
@@ -303,6 +312,9 @@ export default function App() {
           },
           onHoverBoxChange: (boxId) => {
             setHoveredBoxId(boxId);
+          },
+          onPlacementModeChange: (armed) => {
+            setIsBoxPlacementArmed(armed);
           },
           onSelectedBoxChange: (boxId) => {
             pendingFocusBoxIdRef.current = null;
@@ -570,6 +582,31 @@ export default function App() {
     setIsNameModalOpen(true);
   };
 
+  const handleOpenContextMenu = (
+    event: ReactMouseEvent<HTMLElement>,
+  ): void => {
+    event.preventDefault();
+
+    const viewerElement = viewerShellRef.current;
+
+    if (!viewerElement) {
+      return;
+    }
+
+    const bounds = viewerElement.getBoundingClientRect();
+
+    setContextMenuState({
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    });
+  };
+
+  const handleArmBoxPlacement = (): void => {
+    sceneRef.current?.armBoxPlacement();
+    setContextMenuState(null);
+    showHint('Clique esquerdo no mapa para posicionar a nova sala.');
+  };
+
   const handleSaveBoxName = (): void => {
     const nextName = pendingBoxName.trim();
 
@@ -665,10 +702,10 @@ export default function App() {
       <aside className="panel">
         <h1>PUC-Rio 3D Overlay</h1>
         <p className="muted">
-          Use <strong>Alt + clique esquerdo</strong> para inserir uma caixa na
-          posição do mouse. Use <strong>clique esquerdo</strong> para selecionar
-          uma caixa. Passe o mouse por cima de uma caixa sem seleção ativa para
-          ver os dados dela.
+          Use <strong>clique direito</strong> no mapa para abrir o menu de
+          contexto e escolher <strong>Adicionar sala</strong>. Depois, use{' '}
+          <strong>clique esquerdo</strong> para posicionar a caixa. Clique
+          esquerdo também continua selecionando caixas já existentes.
         </p>
 
         <div className="section">
@@ -994,6 +1031,12 @@ export default function App() {
 
       <main
         className="viewerShell"
+        onContextMenu={handleOpenContextMenu}
+        onPointerDownCapture={(event) => {
+          if (event.button === 0) {
+            setContextMenuState(null);
+          }
+        }}
         onPointerMove={handleViewerPointerMove}
         onPointerLeave={() => setHoveredBoxId(null)}
         onWheelCapture={(event) => {
@@ -1004,6 +1047,9 @@ export default function App() {
         ref={viewerShellRef}
       >
         {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
+        {isBoxPlacementArmed ? (
+          <div className="placementBadge">Adicionar sala: clique no mapa</div>
+        ) : null}
         {hoveredBox ? (
           <div
             className="hoverTooltip"
@@ -1013,6 +1059,20 @@ export default function App() {
             }}
           >
             {hoveredBox.name}
+          </div>
+        ) : null}
+        {contextMenuState ? (
+          <div
+            className="contextMenu"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              left: `${contextMenuState.x}px`,
+              top: `${contextMenuState.y}px`,
+            }}
+          >
+            <button onClick={handleArmBoxPlacement} type="button">
+              Adicionar sala
+            </button>
           </div>
         ) : null}
         <div id="mapContainer" ref={containerRef} />

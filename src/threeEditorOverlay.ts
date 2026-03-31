@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import type { TransformControlsEventMap } from 'three/examples/jsm/controls/TransformControls.js';
 import type { CameraState, LatLngAltitude } from './cameraUrlState';
 import {
   clampScaleValue,
@@ -229,7 +230,7 @@ export function initializeThreeEditorOverlay(
     raycaster.setFromCamera(pointer, camera);
 
     const intersections = raycaster.intersectObjects(meshes, false);
-    const hit = intersections.find((candidate) => {
+    const hit = intersections.find((candidate: THREE.Intersection<THREE.Object3D>) => {
       const boxId = candidate.object.userData.boxId;
       return typeof boxId === 'string' && boxId.length > 0;
     });
@@ -472,13 +473,16 @@ export function initializeThreeEditorOverlay(
 
   transformControls.addEventListener('change', scheduleRender);
   transformControls.addEventListener('objectChange', handleTransformObjectChange);
-  transformControls.addEventListener('dragging-changed', (event) => {
-    const nextDragging = Boolean((event as { value?: boolean }).value);
+  transformControls.addEventListener(
+    'dragging-changed',
+    (event: TransformControlsEventMap['dragging-changed']) => {
+      const nextDragging = Boolean(event.value);
 
-    transformDragging = nextDragging;
-    editorStore.getState().setTransformDragging(nextDragging);
-    scheduleRender();
-  });
+      transformDragging = nextDragging;
+      editorStore.getState().setTransformDragging(nextDragging);
+      scheduleRender();
+    },
+  );
 
   options.viewerElement.addEventListener('pointerdown', handlePointerDown);
   options.viewerElement.addEventListener('pointermove', handlePointerMove);

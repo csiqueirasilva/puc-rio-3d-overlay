@@ -132,6 +132,17 @@ function applyMapInteractionLock(
   map.gestureHandling = blocked ? 'NONE' : 'COOPERATIVE';
 }
 
+function shouldBlockMapInteraction(state: {
+  placementMode: 'idle' | 'placing-space';
+  selectedSpaceId: string | null;
+  transformDragging: boolean;
+}): boolean {
+  return (
+    state.transformDragging ||
+    (state.selectedSpaceId !== null && state.placementMode === 'idle')
+  );
+}
+
 export async function initializeGoogleMapsScene(
   container: HTMLElement,
   options: InitializeSceneOptions = {},
@@ -144,7 +155,8 @@ export async function initializeGoogleMapsScene(
   let boxes = cloneBoxesConfig(editorStore.getState().boxes);
   let boxPlacementArmed = editorStore.getState().placementMode === 'placing-space';
   let cameraLocked = editorStore.getState().cameraLocked;
-  let transformDragging = editorStore.getState().transformDragging;
+  let selectedSpaceId = editorStore.getState().selectedSpaceId;
+  let mapInteractionBlocked = shouldBlockMapInteraction(editorStore.getState());
   let enforcingCamera = false;
 
   const map = new Map3DElement({
@@ -268,6 +280,16 @@ export async function initializeGoogleMapsScene(
     (state) => state.placementMode,
     (nextPlacementMode) => {
       setBoxPlacementArmed(nextPlacementMode === 'placing-space');
+      mapInteractionBlocked = shouldBlockMapInteraction(editorStore.getState());
+      applyMapInteractionLock(map, mapInteractionBlocked);
+    },
+  );
+  const unsubscribeSelectedSpace = editorStore.subscribe(
+    (state) => state.selectedSpaceId,
+    (nextSelectedSpaceId) => {
+      selectedSpaceId = nextSelectedSpaceId;
+      mapInteractionBlocked = shouldBlockMapInteraction(editorStore.getState());
+      applyMapInteractionLock(map, mapInteractionBlocked);
     },
   );
   const unsubscribeCameraLocked = editorStore.subscribe(
@@ -281,14 +303,18 @@ export async function initializeGoogleMapsScene(
   const unsubscribeTransformDragging = editorStore.subscribe(
     (state) => state.transformDragging,
     (nextDragging) => {
-      transformDragging = nextDragging;
-      applyMapInteractionLock(map, transformDragging);
+      mapInteractionBlocked = shouldBlockMapInteraction({
+        placementMode: boxPlacementArmed ? 'placing-space' : 'idle',
+        selectedSpaceId,
+        transformDragging: nextDragging,
+      });
+      applyMapInteractionLock(map, mapInteractionBlocked);
     },
   );
 
   map.addEventListener('gmp-click', handleMapClick);
 
-  applyMapInteractionLock(map, transformDragging);
+  applyMapInteractionLock(map, mapInteractionBlocked);
   applyCameraLock(map, fixedCameraState, cameraLocked);
   syncCameraState();
 
@@ -300,6 +326,7 @@ export async function initializeGoogleMapsScene(
 
       unsubscribeBoxes();
       unsubscribePlacementMode();
+      unsubscribeSelectedSpace();
       unsubscribeCameraLocked();
       unsubscribeTransformDragging();
       map.removeEventListener('gmp-click', handleMapClick);
@@ -310,7 +337,8 @@ export async function initializeGoogleMapsScene(
     setCameraState: (cameraState: CameraState) => {
       fixedCameraState = cloneCameraState(cameraState);
       applyCameraState(map, fixedCameraState);
-      applyMapInteractionLock(map, transformDragging);
+      mapInteractionBlocked = shouldBlockMapInteraction(editorStore.getState());
+      applyMapInteractionLock(map, mapInteractionBlocked);
       applyCameraLock(map, fixedCameraState, cameraLocked);
       syncCameraState();
     },

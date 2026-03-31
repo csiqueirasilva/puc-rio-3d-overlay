@@ -773,7 +773,8 @@ export default function App() {
           contexto e escolher <strong>Adicionar espaço</strong>. Depois, use{' '}
           <strong>clique esquerdo</strong> para posicionar o espaço. Quando um
           espaço estiver selecionado, use o gizmo 3D para mover, rotacionar ou
-          escalar diretamente sobre o mapa.
+          escalar diretamente sobre o mapa. Enquanto o gizmo estiver ativo, a
+          navegação do Google Maps por mouse fica desativada.
         </p>
 
         <div className="section">

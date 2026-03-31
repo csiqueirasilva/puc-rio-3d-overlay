@@ -278,12 +278,14 @@ textarea {
 .floatingEditor {
   position: absolute;
   z-index: 29;
-  width: 392px;
+  display: flex;
+  flex-direction: column;
   padding: 10px;
   border-radius: 16px;
   background: rgba(15, 23, 42, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
+  overflow: hidden;
 }
 
 .floatingEditorHeader {
@@ -299,6 +301,14 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.floatingHeaderMain {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .floatingEditorName {
@@ -322,6 +332,33 @@ textarea {
 .floatingNameButton:hover {
   background: transparent;
   color: #fde68a;
+}
+
+.floatingDragHandle {
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 3px;
+  align-content: center;
+  flex: 0 0 auto;
+  cursor: grab;
+}
+
+.floatingDragHandle:active {
+  cursor: grabbing;
+}
+
+.floatingDragHandle span {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  justify-self: center;
+  align-self: center;
+  opacity: 0.85;
 }
 
 .floatingHeaderActions {
@@ -375,6 +412,13 @@ textarea {
   border-color: rgba(250, 204, 21, 0.6);
   background: rgba(250, 204, 21, 0.14);
   color: #fde68a;
+}
+
+.floatingEditorBody {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .floatingEditorTabs {
@@ -433,6 +477,23 @@ textarea {
 
 .floatingMetricsCard strong {
   color: #fde68a;
+}
+
+.floatingResizeHandle {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+}
+
+.floatingResizeHandle::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-right: 2px solid rgba(250, 204, 21, 0.7);
+  border-bottom: 2px solid rgba(250, 204, 21, 0.7);
 }
 
 #mapContainer > gmp-map-3d {

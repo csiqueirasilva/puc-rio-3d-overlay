@@ -60,6 +60,11 @@ interface FloatingEditorPosition {
   y: number;
 }
 
+interface FloatingEditorSize {
+  height: number;
+  width: number;
+}
+
 type FloatingEditorMode = 'translate' | 'rotate' | 'scale';
 type SimpleEditorMode = 'position' | 'size';
 
@@ -192,9 +197,51 @@ function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   return Math.min(currentRange, targetRange);
 }
 
-const FLOATING_EDITOR_WIDTH = 392;
+const FLOATING_EDITOR_WIDTH = 422;
 const FLOATING_EDITOR_HEIGHT = 420;
+const FLOATING_EDITOR_MIN_WIDTH = 360;
+const FLOATING_EDITOR_MIN_HEIGHT = 280;
 const FLOATING_EDITOR_MARGIN = 14;
+
+function clampFloatingEditorLayout(
+  viewerElement: HTMLElement,
+  position: FloatingEditorPosition,
+  size: FloatingEditorSize,
+): {
+  position: FloatingEditorPosition;
+  size: FloatingEditorSize;
+} {
+  const bounds = viewerElement.getBoundingClientRect();
+  const maxWidth = Math.max(240, bounds.width - FLOATING_EDITOR_MARGIN * 2);
+  const maxHeight = Math.max(220, bounds.height - FLOATING_EDITOR_MARGIN * 2);
+  const width = Math.min(
+    Math.max(size.width, Math.min(FLOATING_EDITOR_MIN_WIDTH, maxWidth)),
+    maxWidth,
+  );
+  const height = Math.min(
+    Math.max(size.height, Math.min(FLOATING_EDITOR_MIN_HEIGHT, maxHeight)),
+    maxHeight,
+  );
+  const x = Math.min(
+    Math.max(position.x, FLOATING_EDITOR_MARGIN),
+    Math.max(
+      FLOATING_EDITOR_MARGIN,
+      bounds.width - width - FLOATING_EDITOR_MARGIN,
+    ),
+  );
+  const y = Math.min(
+    Math.max(position.y, FLOATING_EDITOR_MARGIN),
+    Math.max(
+      FLOATING_EDITOR_MARGIN,
+      bounds.height - height - FLOATING_EDITOR_MARGIN,
+    ),
+  );
+
+  return {
+    position: { x, y },
+    size: { width, height },
+  };
+}
 
 function createFloatingEditorDrafts(box: BoxConfig): FloatingEditorDrafts {
   return {
@@ -310,6 +357,27 @@ export default function App() {
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const floatingEditorRef = useRef<HTMLDivElement | null>(null);
+  const floatingEditorInteractionRef = useRef<
+    | {
+        mode: 'drag';
+        originX: number;
+        originY: number;
+        pointerId: number;
+        startClientX: number;
+        startClientY: number;
+      }
+    | {
+        mode: 'resize';
+        originHeight: number;
+        originWidth: number;
+        originX: number;
+        originY: number;
+        pointerId: number;
+        startClientX: number;
+        startClientY: number;
+      }
+    | null
+  >(null);
   const lastViewerPrimaryPointerRef = useRef<{
     timestamp: number;
     x: number;
@@ -330,6 +398,10 @@ export default function App() {
   });
   const [floatingEditorPosition, setFloatingEditorPosition] =
     useState<FloatingEditorPosition | null>(null);
+  const [floatingEditorSize, setFloatingEditorSize] = useState<FloatingEditorSize>({
+    height: FLOATING_EDITOR_HEIGHT,
+    width: FLOATING_EDITOR_WIDTH,
+  });
   const [floatingEditorDrafts, setFloatingEditorDrafts] =
     useState<FloatingEditorDrafts | null>(null);
   const [floatingNameDraft, setFloatingNameDraft] = useState('');
@@ -491,24 +563,17 @@ export default function App() {
       return;
     }
 
-    const bounds = viewerElement.getBoundingClientRect();
+    const nextLayout = clampFloatingEditorLayout(
+      viewerElement,
+      {
+        x: x + 12,
+        y: y + 12,
+      },
+      floatingEditorSize,
+    );
 
-    setFloatingEditorPosition({
-      x: Math.min(
-        Math.max(x + 12, FLOATING_EDITOR_MARGIN),
-        Math.max(
-          FLOATING_EDITOR_MARGIN,
-          bounds.width - FLOATING_EDITOR_WIDTH - FLOATING_EDITOR_MARGIN,
-        ),
-      ),
-      y: Math.min(
-        Math.max(y + 12, FLOATING_EDITOR_MARGIN),
-        Math.max(
-          FLOATING_EDITOR_MARGIN,
-          bounds.height - FLOATING_EDITOR_HEIGHT - FLOATING_EDITOR_MARGIN,
-        ),
-      ),
-    });
+    setFloatingEditorPosition(nextLayout.position);
+    setFloatingEditorSize(nextLayout.size);
   };
 
   useEffect(() => {
@@ -576,16 +641,18 @@ export default function App() {
       return;
     }
 
-    const bounds = viewerElement.getBoundingClientRect();
+    const nextLayout = clampFloatingEditorLayout(
+      viewerElement,
+      {
+        x: Number.MAX_SAFE_INTEGER,
+        y: FLOATING_EDITOR_MARGIN,
+      },
+      floatingEditorSize,
+    );
 
-    setFloatingEditorPosition({
-      x: Math.max(
-        FLOATING_EDITOR_MARGIN,
-        bounds.width - FLOATING_EDITOR_WIDTH - FLOATING_EDITOR_MARGIN,
-      ),
-      y: FLOATING_EDITOR_MARGIN,
-    });
-  }, [selectedBoxId]);
+    setFloatingEditorPosition(nextLayout.position);
+    setFloatingEditorSize(nextLayout.size);
+  }, [floatingEditorSize, selectedBoxId]);
 
   useEffect(() => {
     if (!selectedBoxId || sceneStatus !== 'ready') {
@@ -620,6 +687,55 @@ export default function App() {
   }, [boxes, clearFocusRequest, pendingFocusBoxId, sceneStatus, selectedBoxId]);
 
   useEffect(() => {
+    if (!selectedBoxId || !floatingEditorPosition) {
+      return;
+    }
+
+    const clampToViewer = (): void => {
+      const viewerElement = viewerShellRef.current;
+
+      if (!viewerElement) {
+        return;
+      }
+
+      const nextLayout = clampFloatingEditorLayout(
+        viewerElement,
+        floatingEditorPosition,
+        floatingEditorSize,
+      );
+
+      setFloatingEditorPosition((currentPosition) => {
+        if (
+          !currentPosition ||
+          (currentPosition.x === nextLayout.position.x &&
+            currentPosition.y === nextLayout.position.y)
+        ) {
+          return currentPosition;
+        }
+
+        return nextLayout.position;
+      });
+      setFloatingEditorSize((currentSize) => {
+        if (
+          currentSize.width === nextLayout.size.width &&
+          currentSize.height === nextLayout.size.height
+        ) {
+          return currentSize;
+        }
+
+        return nextLayout.size;
+      });
+    };
+
+    clampToViewer();
+    window.addEventListener('resize', clampToViewer);
+
+    return () => {
+      window.removeEventListener('resize', clampToViewer);
+    };
+  }, [floatingEditorPosition, floatingEditorSize, selectedBoxId]);
+
+  useEffect(() => {
     syncUrl(cameraStateRef.current, noCache);
   }, [noCache]);
 
@@ -639,6 +755,72 @@ export default function App() {
       hintTimeoutRef.current = null;
     }, 1800);
   };
+
+  useEffect(() => {
+    const finishInteraction = (): void => {
+      floatingEditorInteractionRef.current = null;
+    };
+
+    const handlePointerMove = (event: PointerEvent): void => {
+      const interaction = floatingEditorInteractionRef.current;
+      const viewerElement = viewerShellRef.current;
+
+      if (!interaction || !viewerElement) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (interaction.mode === 'drag') {
+        const nextLayout = clampFloatingEditorLayout(
+          viewerElement,
+          {
+            x:
+              interaction.originX +
+              (event.clientX - interaction.startClientX),
+            y:
+              interaction.originY +
+              (event.clientY - interaction.startClientY),
+          },
+          floatingEditorSize,
+        );
+
+        setFloatingEditorPosition(nextLayout.position);
+        return;
+      }
+
+      const nextLayout = clampFloatingEditorLayout(
+        viewerElement,
+        {
+          x: interaction.originX,
+          y: interaction.originY,
+        },
+        {
+          width:
+            interaction.originWidth +
+            (event.clientX - interaction.startClientX),
+          height:
+            interaction.originHeight +
+            (event.clientY - interaction.startClientY),
+        },
+      );
+
+      setFloatingEditorSize(nextLayout.size);
+      setFloatingEditorPosition(nextLayout.position);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', finishInteraction);
+    window.addEventListener('pointercancel', finishInteraction);
+    window.addEventListener('blur', finishInteraction);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', finishInteraction);
+      window.removeEventListener('pointercancel', finishInteraction);
+      window.removeEventListener('blur', finishInteraction);
+    };
+  }, [floatingEditorSize]);
 
   const syncTrackedCameraForBoxChange = (
     previousBox: BoxConfig,
@@ -1126,6 +1308,46 @@ export default function App() {
     });
   };
 
+  const handleFloatingEditorDragPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    if (!floatingEditorPosition) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    floatingEditorInteractionRef.current = {
+      mode: 'drag',
+      originX: floatingEditorPosition.x,
+      originY: floatingEditorPosition.y,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+    };
+  };
+
+  const handleFloatingEditorResizePointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ): void => {
+    if (!floatingEditorPosition) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    floatingEditorInteractionRef.current = {
+      mode: 'resize',
+      originHeight: floatingEditorSize.height,
+      originWidth: floatingEditorSize.width,
+      originX: floatingEditorPosition.x,
+      originY: floatingEditorPosition.y,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+    };
+  };
+
   const renderFloatingAxisRow = (
     label: string,
     value: string,
@@ -1201,6 +1423,14 @@ export default function App() {
               type="checkbox"
             />
             No cache no próximo reload
+          </label>
+          <label className="row">
+            <input
+              checked={isAdvancedEditor}
+              onChange={(event) => setIsAdvancedEditor(event.target.checked)}
+              type="checkbox"
+            />
+            Configuração avançada
           </label>
         </div>
 
@@ -1349,38 +1579,56 @@ export default function App() {
             onPointerUp={(event) => event.stopPropagation()}
             ref={floatingEditorRef}
             style={{
+              height: `${floatingEditorSize.height}px`,
               left: `${floatingEditorPosition.x}px`,
               top: `${floatingEditorPosition.y}px`,
+              width: `${floatingEditorSize.width}px`,
             }}
           >
             <div className="floatingEditorHeader">
-              <div className="floatingEditorName">
-                {isFloatingNameEditing ? (
-                  <input
-                    autoFocus
-                    onBlur={cancelFloatingNameEdit}
-                    onChange={(event) => setFloatingNameDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        commitFloatingNameEdit();
-                      }
+              <div className="floatingHeaderMain">
+                <button
+                  aria-label="Mover editor"
+                  className="floatingDragHandle"
+                  onPointerDown={handleFloatingEditorDragPointerDown}
+                  title="Mover editor"
+                  type="button"
+                >
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                  <span />
+                </button>
+                <div className="floatingEditorName">
+                  {isFloatingNameEditing ? (
+                    <input
+                      autoFocus
+                      onBlur={cancelFloatingNameEdit}
+                      onChange={(event) => setFloatingNameDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          commitFloatingNameEdit();
+                        }
 
-                      if (event.key === 'Escape') {
-                        cancelFloatingNameEdit();
-                      }
-                    }}
-                    type="text"
-                    value={floatingNameDraft}
-                  />
-                ) : (
-                  <button
-                    className="floatingNameButton"
-                    onClick={() => setIsFloatingNameEditing(true)}
-                    type="button"
-                  >
-                    {selectedBox.name}
-                  </button>
-                )}
+                        if (event.key === 'Escape') {
+                          cancelFloatingNameEdit();
+                        }
+                      }}
+                      type="text"
+                      value={floatingNameDraft}
+                    />
+                  ) : (
+                    <button
+                      className="floatingNameButton"
+                      onClick={() => setIsFloatingNameEditing(true)}
+                      type="button"
+                    >
+                      {selectedBox.name}
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="floatingHeaderActions">
                 <button
@@ -1399,13 +1647,6 @@ export default function App() {
                     <path d="M12 9a3 3 0 1 0 0 6a3 3 0 0 0 0-6Z" />
                     <path d="M12 1v2M12 21v2M1 12h2M21 12h2" />
                   </svg>
-                </button>
-                <button
-                  className={`floatingModeButton ${isAdvancedEditor ? 'isActive' : ''}`}
-                  onClick={() => setIsAdvancedEditor((current) => !current)}
-                  type="button"
-                >
-                  Avançado
                 </button>
                 <div className="floatingHeaderStep">
                   <button onClick={() => adjustQuickStep(-1)} type="button">
@@ -1444,6 +1685,7 @@ export default function App() {
                 </div>
               </div>
             </div>
+            <div className="floatingEditorBody">
             {isAdvancedEditor ? (
               <>
                 <div className="floatingEditorTabs modeToggle modeToggleAdvanced">
@@ -1500,7 +1742,7 @@ export default function App() {
                 {simpleEditorMode === 'position' ? (
                   <div className="floatingAxisGrid">
                     {renderFloatingAxisRow(
-                      'X',
+                      'Largura',
                       floatingEditorDrafts.translate.x,
                       (direction) => adjustSelectedPosition('x', direction),
                       (rawValue) =>
@@ -1509,7 +1751,7 @@ export default function App() {
                       () => resetFloatingDraft('translate', 'x'),
                     )}
                     {renderFloatingAxisRow(
-                      'Y',
+                      'Profundidade',
                       floatingEditorDrafts.translate.y,
                       (direction) => adjustSelectedPosition('y', direction),
                       (rawValue) =>
@@ -1518,7 +1760,7 @@ export default function App() {
                       () => resetFloatingDraft('translate', 'y'),
                     )}
                     {renderFloatingAxisRow(
-                      'Z',
+                      'Altitude',
                       floatingEditorDrafts.translate.z,
                       (direction) => adjustSelectedPosition('z', direction),
                       (rawValue) =>
@@ -1576,6 +1818,12 @@ export default function App() {
                 )}
               </>
             )}
+            </div>
+            <div
+              className="floatingResizeHandle"
+              onPointerDown={handleFloatingEditorResizePointerDown}
+              role="presentation"
+            />
           </div>
         ) : null}
         {contextMenuState ? (

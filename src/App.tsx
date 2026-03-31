@@ -255,8 +255,43 @@ function formatBoxFieldValue(
   return value.toFixed(2);
 }
 
-function getAverageBoxScale(box: BoxConfig): number {
-  return (box.scale.x + box.scale.y + box.scale.z) / 3;
+function getTransformStepValue(
+  mode: FloatingEditorMode,
+  positionStep: number,
+  rotationStep: number,
+  scaleStep: number,
+): number {
+  if (mode === 'translate') {
+    return positionStep;
+  }
+
+  if (mode === 'rotate') {
+    return rotationStep;
+  }
+
+  return scaleStep;
+}
+
+function formatTransformStepDraft(
+  mode: FloatingEditorMode,
+  positionStep: number,
+  rotationStep: number,
+  scaleStep: number,
+): string {
+  const value = getTransformStepValue(mode, positionStep, rotationStep, scaleStep);
+  return value.toFixed(mode === 'rotate' ? 1 : 2);
+}
+
+function clampTransformStep(mode: FloatingEditorMode, value: number): number {
+  if (mode === 'rotate') {
+    return Math.min(45, Math.max(0.5, value));
+  }
+
+  return Math.min(10, Math.max(0.05, value));
+}
+
+function getTransformStepAdjustment(mode: FloatingEditorMode): number {
+  return mode === 'rotate' ? 0.5 : 0.05;
 }
 
 export default function App() {
@@ -293,8 +328,8 @@ export default function App() {
     useState<FloatingEditorDrafts | null>(null);
   const [floatingNameDraft, setFloatingNameDraft] = useState('');
   const [isFloatingNameEditing, setIsFloatingNameEditing] = useState(false);
-  const [quickScaleDraft, setQuickScaleDraft] = useState('');
-  const [isQuickScaleEditing, setIsQuickScaleEditing] = useState(false);
+  const [quickStepDraft, setQuickStepDraft] = useState('');
+  const [isQuickStepEditing, setIsQuickStepEditing] = useState(false);
   const boxes = useEditorStore((state) => state.boxes);
   const cameraLocked = useEditorStore((state) => state.cameraLocked);
   const contextMenuState = useEditorStore((state) => state.contextMenu);
@@ -469,8 +504,8 @@ export default function App() {
       setFloatingEditorDrafts(null);
       setFloatingNameDraft('');
       setIsFloatingNameEditing(false);
-      setQuickScaleDraft('');
-      setIsQuickScaleEditing(false);
+      setQuickStepDraft('');
+      setIsQuickStepEditing(false);
       setPendingBoxName('');
       return;
     }
@@ -479,11 +514,30 @@ export default function App() {
     if (!isFloatingNameEditing) {
       setFloatingNameDraft(selectedBox.name);
     }
-    if (!isQuickScaleEditing) {
-      setQuickScaleDraft(getAverageBoxScale(selectedBox).toFixed(2));
-    }
     setPendingBoxName(selectedBox.name);
-  }, [isFloatingNameEditing, isQuickScaleEditing, selectedBox]);
+  }, [isFloatingNameEditing, selectedBox]);
+
+  useEffect(() => {
+    if (!selectedBox || isQuickStepEditing) {
+      return;
+    }
+
+    setQuickStepDraft(
+      formatTransformStepDraft(
+        transformMode,
+        positionStep,
+        rotationStep,
+        scaleStep,
+      ),
+    );
+  }, [
+    isQuickStepEditing,
+    positionStep,
+    rotationStep,
+    scaleStep,
+    selectedBox,
+    transformMode,
+  ]);
 
   useEffect(() => {
     const previousSelectedBoxId = previousSelectedBoxIdRef.current;
@@ -853,56 +907,55 @@ export default function App() {
     setIsFloatingNameEditing(false);
   };
 
-  const applyAverageScale = (targetAverageScale: number): void => {
-    updateSelectedBox((box) => {
-      const currentAverageScale = getAverageBoxScale(box);
-      const nextAverageScale = clampScaleValue(targetAverageScale);
+  const applyTransformStepValue = (
+    mode: FloatingEditorMode,
+    value: number,
+  ): void => {
+    const nextValue = clampTransformStep(mode, value);
 
-      if (currentAverageScale <= 0.0001) {
-        box.scale = {
-          x: nextAverageScale,
-          y: nextAverageScale,
-          z: nextAverageScale,
-        };
-        return box;
-      }
-
-      const scaleFactor = nextAverageScale / currentAverageScale;
-      box.scale = {
-        x: clampScaleValue(box.scale.x * scaleFactor),
-        y: clampScaleValue(box.scale.y * scaleFactor),
-        z: clampScaleValue(box.scale.z * scaleFactor),
-      };
-      return box;
-    });
-  };
-
-  const adjustQuickScale = (direction: -1 | 1): void => {
-    if (!selectedBox) {
+    if (mode === 'translate') {
+      setPositionStep(nextValue);
       return;
     }
 
-    applyAverageScale(getAverageBoxScale(selectedBox) + scaleStep * direction);
-  };
-
-  const cancelQuickScaleEdit = (): void => {
-    setIsQuickScaleEditing(false);
-
-    if (selectedBox) {
-      setQuickScaleDraft(getAverageBoxScale(selectedBox).toFixed(2));
+    if (mode === 'rotate') {
+      setRotationStep(nextValue);
+      return;
     }
+
+    setScaleStep(nextValue);
   };
 
-  const commitQuickScaleEdit = (): void => {
-    const nextValue = Number(quickScaleDraft.trim());
+  const adjustQuickStep = (direction: -1 | 1): void => {
+    applyTransformStepValue(
+      transformMode,
+      getTransformStepValue(transformMode, positionStep, rotationStep, scaleStep) +
+        getTransformStepAdjustment(transformMode) * direction,
+    );
+  };
+
+  const cancelQuickStepEdit = (): void => {
+    setIsQuickStepEditing(false);
+    setQuickStepDraft(
+      formatTransformStepDraft(
+        transformMode,
+        positionStep,
+        rotationStep,
+        scaleStep,
+      ),
+    );
+  };
+
+  const commitQuickStepEdit = (): void => {
+    const nextValue = Number(quickStepDraft.trim());
 
     if (!Number.isFinite(nextValue)) {
-      cancelQuickScaleEdit();
+      cancelQuickStepEdit();
       return;
     }
 
-    applyAverageScale(nextValue);
-    setIsQuickScaleEditing(false);
+    applyTransformStepValue(transformMode, nextValue);
+    setIsQuickStepEditing(false);
   };
 
   const handleDeleteSelectedBox = (): void => {
@@ -1411,37 +1464,45 @@ export default function App() {
                 )}
               </div>
               <div className="floatingHeaderScale">
-                <button onClick={() => adjustQuickScale(-1)} type="button">
+                <button onClick={() => adjustQuickStep(-1)} type="button">
                   -
                 </button>
-                {isQuickScaleEditing ? (
+                {isQuickStepEditing ? (
                   <input
                     autoFocus
                     inputMode="decimal"
-                    onBlur={cancelQuickScaleEdit}
-                    onChange={(event) => setQuickScaleDraft(event.target.value)}
+                    onBlur={cancelQuickStepEdit}
+                    onChange={(event) => setQuickStepDraft(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') {
-                        commitQuickScaleEdit();
+                        commitQuickStepEdit();
                       }
 
                       if (event.key === 'Escape') {
-                        cancelQuickScaleEdit();
+                        cancelQuickStepEdit();
                       }
                     }}
                     type="text"
-                    value={quickScaleDraft}
+                    value={quickStepDraft}
                   />
                 ) : (
                   <button
                     className="floatingScaleValue"
-                    onClick={() => setIsQuickScaleEditing(true)}
+                    onClick={() => setIsQuickStepEditing(true)}
                     type="button"
                   >
-                    {selectedBox ? getAverageBoxScale(selectedBox).toFixed(2) : '0.00'}
+                    {formatStepValue(
+                      getTransformStepValue(
+                        transformMode,
+                        positionStep,
+                        rotationStep,
+                        scaleStep,
+                      ),
+                      transformMode === 'rotate' ? 'deg' : 'm',
+                    )}
                   </button>
                 )}
-                <button onClick={() => adjustQuickScale(1)} type="button">
+                <button onClick={() => adjustQuickStep(1)} type="button">
                   +
                 </button>
               </div>

@@ -23,6 +23,20 @@ export interface ScreenPoint {
   y: number;
 }
 
+export interface ScreenVector {
+  x: number;
+  y: number;
+}
+
+export interface BoxFootprintProjection {
+  angleDeg: number;
+  center: ScreenVector;
+  heightPx: number;
+  widthPx: number;
+  xAxisPerMeter: ScreenVector;
+  yAxisPerMeter: ScreenVector;
+}
+
 function degreesToRadians(value: number): number {
   return (value * Math.PI) / 180;
 }
@@ -280,6 +294,25 @@ function dotProduct(left: LocalPoint, right: LocalPoint): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
+function getScreenDistance(left: ScreenVector, right: ScreenVector): number {
+  return Math.hypot(right.x - left.x, right.y - left.y);
+}
+
+function averageScreenVectors(...vectors: ScreenVector[]): ScreenVector {
+  const totals = vectors.reduce(
+    (accumulator, vector) => ({
+      x: accumulator.x + vector.x,
+      y: accumulator.y + vector.y,
+    }),
+    { x: 0, y: 0 },
+  );
+
+  return {
+    x: totals.x / vectors.length,
+    y: totals.y / vectors.length,
+  };
+}
+
 function isPointInPolygon(
   point: { x: number; y: number },
   polygon: Array<{ x: number; y: number }>,
@@ -406,4 +439,104 @@ export function pickBoxAtScreenPoint(
   }
 
   return closestBoxId;
+}
+
+export function projectBoxFootprintToScreen(
+  box: BoxConfig,
+  cameraState: CameraState,
+  viewportWidth: number,
+  viewportHeight: number,
+): BoxFootprintProjection | null {
+  const projectedBottomCorners = getBoxWorldCorners(box)
+    .slice(0, 4)
+    .map((corner) =>
+      projectWorldPointToScreen(
+        cameraState,
+        corner,
+        viewportWidth,
+        viewportHeight,
+      ),
+    );
+
+  if (projectedBottomCorners.some((corner) => !corner)) {
+    return null;
+  }
+
+  const [bottomLeft, bottomRight, topRight, topLeft] =
+    projectedBottomCorners as ScreenPoint[];
+  const center = averageScreenVectors(
+    bottomLeft,
+    bottomRight,
+    topRight,
+    topLeft,
+  );
+  const xAxisScreen = averageScreenVectors(
+    {
+      x: bottomRight.x - bottomLeft.x,
+      y: bottomRight.y - bottomLeft.y,
+    },
+    {
+      x: topRight.x - topLeft.x,
+      y: topRight.y - topLeft.y,
+    },
+  );
+  const yAxisScreen = averageScreenVectors(
+    {
+      x: topLeft.x - bottomLeft.x,
+      y: topLeft.y - bottomLeft.y,
+    },
+    {
+      x: topRight.x - bottomRight.x,
+      y: topRight.y - bottomRight.y,
+    },
+  );
+  const widthPx = Math.max(
+    1,
+    (getScreenDistance(bottomLeft, bottomRight) +
+      getScreenDistance(topLeft, topRight)) /
+      2,
+  );
+  const heightPx = Math.max(
+    1,
+    (getScreenDistance(bottomLeft, topLeft) +
+      getScreenDistance(bottomRight, topRight)) /
+      2,
+  );
+
+  return {
+    angleDeg: radiansToDegrees(Math.atan2(xAxisScreen.y, xAxisScreen.x)),
+    center,
+    heightPx,
+    widthPx,
+    xAxisPerMeter: {
+      x: xAxisScreen.x / Math.max(box.scale.x, 0.0001),
+      y: xAxisScreen.y / Math.max(box.scale.x, 0.0001),
+    },
+    yAxisPerMeter: {
+      x: yAxisScreen.x / Math.max(box.scale.y, 0.0001),
+      y: yAxisScreen.y / Math.max(box.scale.y, 0.0001),
+    },
+  };
+}
+
+export function solveLocalMetersFromScreenDelta(
+  screenDelta: ScreenVector,
+  xAxisPerMeter: ScreenVector,
+  yAxisPerMeter: ScreenVector,
+): { x: number; y: number } | null {
+  const determinant =
+    xAxisPerMeter.x * yAxisPerMeter.y - xAxisPerMeter.y * yAxisPerMeter.x;
+
+  if (Math.abs(determinant) < 0.000001) {
+    return null;
+  }
+
+  return {
+    x:
+      (screenDelta.x * yAxisPerMeter.y - screenDelta.y * yAxisPerMeter.x) /
+      determinant,
+    y:
+      (xAxisPerMeter.x * screenDelta.y - xAxisPerMeter.y * screenDelta.x) /
+      determinant,
+  };
 }

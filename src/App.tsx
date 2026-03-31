@@ -6,6 +6,17 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import Moveable, {
+  type OnDrag,
+  type OnDragEnd,
+  type OnDragStart,
+  type OnRotate,
+  type OnRotateEnd,
+  type OnRotateStart,
+  type OnScale,
+  type OnScaleEnd,
+  type OnScaleStart,
+} from 'react-moveable';
 import {
   buildNoCacheReloadUrl,
   buildUrlWithCameraState,
@@ -29,18 +40,17 @@ import {
   getOffsetFromPosition,
   inverseRotateLocalPoint,
   normalizeDegrees,
+  projectBoxFootprintToScreen,
   rotateLocalPoint,
+  solveLocalMetersFromScreenDelta,
   translatePosition,
+  type BoxFootprintProjection,
 } from './boxMath';
 import {
   initializeGoogleMapsScene,
   type SceneController,
 } from './googleMapsScene';
 import { editorStore, useEditorStore } from './editorStore';
-import {
-  initializeThreeEditorOverlay,
-  type ThreeEditorOverlayController,
-} from './threeEditorOverlay';
 
 type SceneStatus = 'loading' | 'ready' | 'error';
 type AxisName = 'x' | 'y' | 'z';
@@ -211,14 +221,42 @@ function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   return Math.min(currentRange, targetRange);
 }
 
+function snapValue(value: number, step: number): number {
+  if (!Number.isFinite(value) || step <= 0) {
+    return value;
+  }
+
+  return Math.round(value / step) * step;
+}
+
+function getMoveableScaleFromScreen(
+  basePixelsPerMeter: number,
+  nextPixelsPerMeter: number,
+  baseMeters: number,
+): number {
+  if (
+    !Number.isFinite(basePixelsPerMeter) ||
+    !Number.isFinite(nextPixelsPerMeter) ||
+    basePixelsPerMeter <= 0
+  ) {
+    return baseMeters;
+  }
+
+  return clampScaleValue(baseMeters * (nextPixelsPerMeter / basePixelsPerMeter));
+}
+
+interface MoveableGestureState {
+  projection: BoxFootprintProjection;
+  startBox: BoxConfig;
+}
+
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const overlayContainerRef = useRef<HTMLDivElement | null>(null);
+  const moveableRef = useRef<Moveable | null>(null);
   const viewerShellRef = useRef<HTMLElement | null>(null);
   const sceneRef = useRef<SceneController | null>(null);
-  const overlayRef = useRef<ThreeEditorOverlayController | null>(null);
   const startupCameraState = parseCameraStateFromUrl() ?? getDefaultCameraState();
   const [defaultCameraState, setDefaultCameraState] =
     useState<CameraState>(startupCameraState);
@@ -234,6 +272,12 @@ export default function App() {
   const [cameraUrl, setCameraUrl] = useState(() =>
     buildUrlWithNoCache(parseNoCacheFromUrl(), buildUrlWithCameraState(startupCameraState)),
   );
+  const [viewerViewport, setViewerViewport] = useState({
+    height: 0,
+    width: 0,
+  });
+  const [moveableTargetElement, setMoveableTargetElement] =
+    useState<HTMLDivElement | null>(null);
   const boxes = useEditorStore((state) => state.boxes);
   const cameraLocked = useEditorStore((state) => state.cameraLocked);
   const contextMenuState = useEditorStore((state) => state.contextMenu);
@@ -267,6 +311,9 @@ export default function App() {
   const setPositionStep = useEditorStore((state) => state.setPositionStep);
   const setRotationStep = useEditorStore((state) => state.setRotationStep);
   const setScaleStep = useEditorStore((state) => state.setScaleStep);
+  const setTransformDragging = useEditorStore(
+    (state) => state.setTransformDragging,
+  );
   const setTransformMode = useEditorStore((state) => state.setTransformMode);
   const setTransformSnapEnabled = useEditorStore(
     (state) => state.setTransformSnapEnabled,
@@ -288,6 +335,15 @@ export default function App() {
       sensitivity: 'base',
     }),
   );
+  const selectedBoxProjection =
+    selectedBox && viewerViewport.width > 0 && viewerViewport.height > 0
+      ? projectBoxFootprintToScreen(
+          selectedBox,
+          cameraStateRef.current,
+          viewerViewport.width,
+          viewerViewport.height,
+        )
+      : null;
 
   const syncUrl = (
     cameraState: CameraState = cameraStateRef.current,
@@ -316,16 +372,14 @@ export default function App() {
 
   useEffect(() => {
     const container = containerRef.current;
-    const overlayContainer = overlayContainerRef.current;
     const viewerElement = viewerShellRef.current;
 
-    if (!container || !overlayContainer || !viewerElement) {
+    if (!container || !viewerElement) {
       return;
     }
 
     let active = true;
     let controller: SceneController | null = null;
-    let overlayController: ThreeEditorOverlayController | null = null;
 
     const loadScene = async () => {
       try {
@@ -336,7 +390,6 @@ export default function App() {
           initialCameraState: defaultCameraState,
           onCameraStateChange: (cameraState) => {
             cameraStateRef.current = cameraState;
-            overlayRef.current?.setCameraState(cameraState);
 
             if (cameraUrlFrameRef.current !== null) {
               window.cancelAnimationFrame(cameraUrlFrameRef.current);
@@ -349,23 +402,15 @@ export default function App() {
           },
         });
 
-        overlayController = initializeThreeEditorOverlay(overlayContainer, {
-          initialCameraState: defaultCameraState,
-          viewerElement,
-        });
-
         if (!active) {
           controller.destroy();
-          overlayController.destroy();
           return;
         }
 
         sceneRef.current = controller;
-        overlayRef.current = overlayController;
         setSceneStatus('ready');
       } catch (error) {
         controller?.destroy();
-        overlayController?.destroy();
 
         if (!active) {
           return;
@@ -385,27 +430,53 @@ export default function App() {
     return () => {
       active = false;
       controller?.destroy();
-      overlayController?.destroy();
 
       if (sceneRef.current === controller) {
         sceneRef.current = null;
-      }
-
-      if (overlayRef.current === overlayController) {
-        overlayRef.current = null;
       }
     };
   }, []);
 
   useEffect(() => {
+    const viewerElement = viewerShellRef.current;
+
+    if (!viewerElement) {
+      return;
+    }
+
+    const syncViewerViewport = (): void => {
+      const bounds = viewerElement.getBoundingClientRect();
+
+      setViewerViewport({
+        height: bounds.height,
+        width: bounds.width,
+      });
+    };
+
+    syncViewerViewport();
+
+    const resizeObserver = new ResizeObserver(syncViewerViewport);
+    resizeObserver.observe(viewerElement);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    moveableRef.current?.updateRect();
+  }, [moveableTargetElement, selectedBoxProjection, transformMode]);
+
+  useEffect(() => {
     if (!selectedBox) {
       setIsNameModalOpen(false);
       setPendingBoxName('');
+      setTransformDragging(false);
       return;
     }
 
     setPendingBoxName(selectedBox.name);
-  }, [selectedBox]);
+  }, [selectedBox, setTransformDragging]);
 
   useEffect(() => {
     if (!selectedBoxId || sceneStatus !== 'ready') {
@@ -445,7 +516,6 @@ export default function App() {
 
   useEffect(() => {
     sceneRef.current?.setCameraState(defaultCameraState);
-    overlayRef.current?.setCameraState(defaultCameraState);
   }, [defaultCameraState]);
 
   const showHint = (message: string): void => {
@@ -500,7 +570,6 @@ export default function App() {
     cameraStateRef.current = nextCameraState;
     setDefaultCameraState(nextCameraState);
     sceneRef.current?.setCameraState(nextCameraState);
-    overlayRef.current?.setCameraState(nextCameraState);
     syncUrl(nextCameraState, editorStore.getState().noCache);
   };
 
@@ -546,6 +615,163 @@ export default function App() {
 
     const nextBox = updater(cloneBoxConfig(selectedBox));
     updateSpace(selectedBoxId, () => nextBox);
+  };
+
+  const handleMoveableDragStart = (event: OnDragStart): void => {
+    if (!selectedBox || !selectedBoxProjection) {
+      event.stopAble();
+      return;
+    }
+
+    const datas = event.datas as MoveableGestureState;
+    datas.projection = selectedBoxProjection;
+    datas.startBox = cloneBoxConfig(selectedBox);
+    setTransformDragging(true);
+  };
+
+  const handleMoveableDrag = (event: OnDrag): void => {
+    if (!selectedBoxId) {
+      return;
+    }
+
+    const datas = event.datas as Partial<MoveableGestureState>;
+
+    if (!datas.startBox || !datas.projection) {
+      return;
+    }
+
+    const startBox = datas.startBox;
+    const projection = datas.projection;
+
+    const localDelta = solveLocalMetersFromScreenDelta(
+      {
+        x: event.beforeTranslate[0],
+        y: event.beforeTranslate[1],
+      },
+      projection.xAxisPerMeter,
+      projection.yAxisPerMeter,
+    );
+
+    if (!localDelta) {
+      return;
+    }
+
+    const nextLocalDelta = {
+      x: transformSnapEnabled ? snapValue(localDelta.x, positionStep) : localDelta.x,
+      y: transformSnapEnabled ? snapValue(localDelta.y, positionStep) : localDelta.y,
+      z: 0,
+    };
+    const worldOffset = rotateLocalPoint(nextLocalDelta, startBox.rotation);
+
+    updateSpace(selectedBoxId, () => ({
+      ...cloneBoxConfig(startBox),
+      position: translatePosition(
+        startBox.position,
+        worldOffset.x,
+        worldOffset.y,
+        worldOffset.z,
+      ),
+    }));
+  };
+
+  const handleMoveableDragEnd = (_event: OnDragEnd): void => {
+    setTransformDragging(false);
+  };
+
+  const handleMoveableRotateStart = (event: OnRotateStart): void => {
+    if (!selectedBox || !selectedBoxProjection) {
+      event.stopAble();
+      return;
+    }
+
+    const datas = event.datas as MoveableGestureState;
+    datas.projection = selectedBoxProjection;
+    datas.startBox = cloneBoxConfig(selectedBox);
+    setTransformDragging(true);
+  };
+
+  const handleMoveableRotate = (event: OnRotate): void => {
+    if (!selectedBoxId) {
+      return;
+    }
+
+    const datas = event.datas as Partial<MoveableGestureState>;
+
+    if (!datas.startBox) {
+      return;
+    }
+
+    const startBox = datas.startBox;
+    const rawRotation = startBox.rotation.z + event.beforeDist;
+    const nextRotation = transformSnapEnabled
+      ? snapValue(rawRotation, rotationStep)
+      : rawRotation;
+
+    updateSpace(selectedBoxId, () => ({
+      ...cloneBoxConfig(startBox),
+      rotation: {
+        ...startBox.rotation,
+        z: normalizeDegrees(nextRotation),
+      },
+    }));
+  };
+
+  const handleMoveableRotateEnd = (_event: OnRotateEnd): void => {
+    setTransformDragging(false);
+  };
+
+  const handleMoveableScaleStart = (event: OnScaleStart): void => {
+    if (!selectedBox || !selectedBoxProjection) {
+      event.stopAble();
+      return;
+    }
+
+    const datas = event.datas as MoveableGestureState;
+    datas.projection = selectedBoxProjection;
+    datas.startBox = cloneBoxConfig(selectedBox);
+    setTransformDragging(true);
+  };
+
+  const handleMoveableScale = (event: OnScale): void => {
+    if (!selectedBoxId) {
+      return;
+    }
+
+    const datas = event.datas as Partial<MoveableGestureState>;
+
+    if (!datas.startBox || !datas.projection) {
+      return;
+    }
+
+    const startBox = datas.startBox;
+    const projection = datas.projection;
+    const nextScaleX = getMoveableScaleFromScreen(
+      projection.widthPx / startBox.scale.x,
+      (projection.widthPx * event.scale[0]) / startBox.scale.x,
+      startBox.scale.x,
+    );
+    const nextScaleY = getMoveableScaleFromScreen(
+      projection.heightPx / startBox.scale.y,
+      (projection.heightPx * event.scale[1]) / startBox.scale.y,
+      startBox.scale.y,
+    );
+
+    updateSpace(selectedBoxId, () => ({
+      ...cloneBoxConfig(startBox),
+      scale: {
+        ...startBox.scale,
+        x: clampScaleValue(
+          transformSnapEnabled ? snapValue(nextScaleX, scaleStep) : nextScaleX,
+        ),
+        y: clampScaleValue(
+          transformSnapEnabled ? snapValue(nextScaleY, scaleStep) : nextScaleY,
+        ),
+      },
+    }));
+  };
+
+  const handleMoveableScaleEnd = (_event: OnScaleEnd): void => {
+    setTransformDragging(false);
   };
 
   const adjustSelectedPosition = (
@@ -651,7 +877,7 @@ export default function App() {
     const bounds = viewerElement.getBoundingClientRect();
 
     openContextMenu({
-      targetSpaceId: hoveredBoxId,
+      targetSpaceId: selectedBoxId ?? hoveredBoxId,
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
@@ -764,6 +990,16 @@ export default function App() {
     });
   };
 
+  const moveableTargetStyle = selectedBoxProjection
+    ? {
+        height: `${selectedBoxProjection.heightPx}px`,
+        left: `${selectedBoxProjection.center.x - selectedBoxProjection.widthPx / 2}px`,
+        top: `${selectedBoxProjection.center.y - selectedBoxProjection.heightPx / 2}px`,
+        transform: `rotate(${selectedBoxProjection.angleDeg}deg)`,
+        width: `${selectedBoxProjection.widthPx}px`,
+      }
+    : undefined;
+
   return (
     <div className="layout">
       <aside className="panel">
@@ -772,9 +1008,11 @@ export default function App() {
           Use <strong>clique direito</strong> no mapa para abrir o menu de
           contexto e escolher <strong>Adicionar espaço</strong>. Depois, use{' '}
           <strong>clique esquerdo</strong> para posicionar o espaço. Quando um
-          espaço estiver selecionado, use o gizmo 3D para mover, rotacionar ou
-          escalar diretamente sobre o mapa. Enquanto o gizmo estiver ativo, a
-          navegação do Google Maps por mouse fica desativada.
+          espaço estiver selecionado, use o gizmo DOM sobre o mapa para mover,
+          rotacionar e escalar a footprint do espaço. A camada por mouse atua
+          em <strong>X/Y local</strong> e <strong>rotação Z</strong>; altura,
+          escala Z e rotações X/Y continuam no painel. Enquanto o gizmo estiver
+          ativo, a navegação do Google Maps por mouse fica desativada.
         </p>
 
         <div className="section">
@@ -930,12 +1168,13 @@ export default function App() {
             <p className="small">
               Translação local do espaço: <code>X</code>, <code>Y</code> e{' '}
               <code>Z</code> seguem a rotação atual do próprio objeto. Os
-              botões usam o passo em metros; o gizmo 3D também usa esse snap
-              quando ativado.
+              botões usam o passo em metros; o gizmo do mapa usa esse snap para
+              mover em <code>X/Y</code>, rotacionar em <code>Z</code> e escalar
+              a footprint em <code>X/Y</code>.
             </p>
 
             <div className="editorGroup">
-              <p className="groupLabel">Gizmo 3D</p>
+              <p className="groupLabel">Gizmo do mapa</p>
               <div className="modeToggle">
                 {([
                   ['translate', 'Mover'],
@@ -1190,7 +1429,44 @@ export default function App() {
         }}
         ref={viewerShellRef}
       >
-        <div className="threeOverlayLayer" ref={overlayContainerRef} />
+        <div className="moveableOverlayLayer">
+          {selectedBox && selectedBoxProjection ? (
+            <>
+              <div
+                className="moveableTarget"
+                ref={setMoveableTargetElement}
+                style={moveableTargetStyle}
+              />
+              <Moveable
+                draggable={transformMode === 'translate'}
+                keepRatio={false}
+                origin={false}
+                preventClickEventOnDrag={true}
+                preventDefault={true}
+                preventRightClick={false}
+                ref={moveableRef}
+                renderDirections={
+                  transformMode === 'scale'
+                    ? ['n', 'e', 's', 'w', 'nw', 'ne', 'se', 'sw']
+                    : false
+                }
+                rotatable={transformMode === 'rotate'}
+                rotationPosition="top"
+                scalable={transformMode === 'scale'}
+                target={moveableTargetElement}
+                onDrag={handleMoveableDrag}
+                onDragEnd={handleMoveableDragEnd}
+                onDragStart={handleMoveableDragStart}
+                onRotate={handleMoveableRotate}
+                onRotateEnd={handleMoveableRotateEnd}
+                onRotateStart={handleMoveableRotateStart}
+                onScale={handleMoveableScale}
+                onScaleEnd={handleMoveableScaleEnd}
+                onScaleStart={handleMoveableScaleStart}
+              />
+            </>
+          ) : null}
+        </div>
         {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
         {isBoxPlacementArmed ? (
           <div className="placementBadge">Adicionar espaço: clique no mapa</div>

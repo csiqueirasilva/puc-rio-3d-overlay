@@ -58,31 +58,12 @@ interface FloatingEditorPosition {
   y: number;
 }
 
-interface AxisControlProps {
-  axis: AxisName;
-  displayValue: string;
-  onDecrement: () => void;
-  onIncrement: () => void;
-}
+type FloatingEditorMode = 'translate' | 'rotate' | 'scale';
 
-function AxisControl({
-  axis,
-  displayValue,
-  onDecrement,
-  onIncrement,
-}: AxisControlProps) {
-  return (
-    <div className="axisControl">
-      <span className="axisLabel">{axis.toUpperCase()}</span>
-      <button onClick={onDecrement} type="button">
-        -
-      </button>
-      <code>{displayValue}</code>
-      <button onClick={onIncrement} type="button">
-        +
-      </button>
-    </div>
-  );
+interface FloatingEditorDrafts {
+  rotate: Record<AxisName, string>;
+  scale: Record<AxisName, string>;
+  translate: Record<AxisName, string>;
 }
 
 function isCameraState(value: unknown): value is CameraState {
@@ -212,9 +193,67 @@ function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   return Math.min(currentRange, targetRange);
 }
 
-const FLOATING_EDITOR_WIDTH = 252;
-const FLOATING_EDITOR_HEIGHT = 238;
+const FLOATING_EDITOR_WIDTH = 340;
+const FLOATING_EDITOR_HEIGHT = 320;
 const FLOATING_EDITOR_MARGIN = 14;
+
+function createFloatingEditorDrafts(box: BoxConfig): FloatingEditorDrafts {
+  return {
+    rotate: {
+      x: box.rotation.x.toFixed(2),
+      y: box.rotation.y.toFixed(2),
+      z: box.rotation.z.toFixed(2),
+    },
+    scale: {
+      x: box.scale.x.toFixed(2),
+      y: box.scale.y.toFixed(2),
+      z: box.scale.z.toFixed(2),
+    },
+    translate: {
+      x: box.position.lng.toFixed(7),
+      y: box.position.lat.toFixed(7),
+      z: box.position.altitude.toFixed(2),
+    },
+  };
+}
+
+function getBoxFieldValue(
+  box: BoxConfig,
+  mode: FloatingEditorMode,
+  axis: AxisName,
+): number {
+  if (mode === 'translate') {
+    if (axis === 'x') {
+      return box.position.lng;
+    }
+
+    if (axis === 'y') {
+      return box.position.lat;
+    }
+
+    return box.position.altitude;
+  }
+
+  if (mode === 'rotate') {
+    return box.rotation[axis];
+  }
+
+  return box.scale[axis];
+}
+
+function formatBoxFieldValue(
+  box: BoxConfig,
+  mode: FloatingEditorMode,
+  axis: AxisName,
+): string {
+  const value = getBoxFieldValue(box, mode, axis);
+
+  if (mode === 'translate' && axis !== 'z') {
+    return value.toFixed(7);
+  }
+
+  return value.toFixed(2);
+}
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -246,6 +285,8 @@ export default function App() {
   );
   const [floatingEditorPosition, setFloatingEditorPosition] =
     useState<FloatingEditorPosition | null>(null);
+  const [floatingEditorDrafts, setFloatingEditorDrafts] =
+    useState<FloatingEditorDrafts | null>(null);
   const boxes = useEditorStore((state) => state.boxes);
   const cameraLocked = useEditorStore((state) => state.cameraLocked);
   const contextMenuState = useEditorStore((state) => state.contextMenu);
@@ -417,10 +458,12 @@ export default function App() {
   useEffect(() => {
     if (!selectedBox) {
       setIsNameModalOpen(false);
+      setFloatingEditorDrafts(null);
       setPendingBoxName('');
       return;
     }
 
+    setFloatingEditorDrafts(createFloatingEditorDrafts(selectedBox));
     setPendingBoxName(selectedBox.name);
   }, [selectedBox]);
 
@@ -444,7 +487,22 @@ export default function App() {
       return;
     }
 
-    setFloatingEditorPosition(null);
+    const viewerElement = viewerShellRef.current;
+
+    if (!viewerElement) {
+      setFloatingEditorPosition(null);
+      return;
+    }
+
+    const bounds = viewerElement.getBoundingClientRect();
+
+    setFloatingEditorPosition({
+      x: Math.max(
+        FLOATING_EDITOR_MARGIN,
+        bounds.width - FLOATING_EDITOR_WIDTH - FLOATING_EDITOR_MARGIN,
+      ),
+      y: FLOATING_EDITOR_MARGIN,
+    });
   }, [selectedBoxId]);
 
   useEffect(() => {
@@ -630,6 +688,100 @@ export default function App() {
     adjustSelectedScale(axis, direction);
   };
 
+  const handleFloatingDraftChange = (
+    mode: FloatingEditorMode,
+    axis: AxisName,
+    rawValue: string,
+  ): void => {
+    setFloatingEditorDrafts((currentDrafts) => {
+      if (!currentDrafts) {
+        return currentDrafts;
+      }
+
+      return {
+        ...currentDrafts,
+        [mode]: {
+          ...currentDrafts[mode],
+          [axis]: rawValue,
+        },
+      };
+    });
+  };
+
+  const resetFloatingDraft = (
+    mode: FloatingEditorMode,
+    axis: AxisName,
+  ): void => {
+    if (!selectedBox) {
+      return;
+    }
+
+    setFloatingEditorDrafts((currentDrafts) => {
+      if (!currentDrafts) {
+        return currentDrafts;
+      }
+
+      return {
+        ...currentDrafts,
+        [mode]: {
+          ...currentDrafts[mode],
+          [axis]: formatBoxFieldValue(selectedBox, mode, axis),
+        },
+      };
+    });
+  };
+
+  const commitFloatingDraft = (
+    mode: FloatingEditorMode,
+    axis: AxisName,
+  ): void => {
+    if (!selectedBox || !floatingEditorDrafts) {
+      return;
+    }
+
+    const rawValue = floatingEditorDrafts[mode][axis].trim();
+    const nextValue = Number(rawValue);
+
+    if (!Number.isFinite(nextValue)) {
+      resetFloatingDraft(mode, axis);
+      return;
+    }
+
+    if (mode === 'translate') {
+      updateSelectedBox((box) => {
+        if (axis === 'x') {
+          box.position.lng = nextValue;
+        } else if (axis === 'y') {
+          box.position.lat = nextValue;
+        } else {
+          box.position.altitude = nextValue;
+        }
+
+        return box;
+      });
+      return;
+    }
+
+    if (mode === 'rotate') {
+      updateSelectedBox((box) => {
+        box.rotation = {
+          ...box.rotation,
+          [axis]: normalizeDegrees(nextValue),
+        };
+        return box;
+      });
+      return;
+    }
+
+    updateSelectedBox((box) => {
+      box.scale = {
+        ...box.scale,
+        [axis]: clampScaleValue(nextValue),
+      };
+      return box;
+    });
+  };
+
   const adjustSelectedRotation = (
     axis: AxisName,
     direction: -1 | 1,
@@ -651,25 +803,6 @@ export default function App() {
       box.scale = {
         ...box.scale,
         [axis]: clampScaleValue(box.scale[axis] + scaleStep * direction),
-      };
-      return box;
-    });
-  };
-
-  const handleSelectedScaleFieldChange = (
-    axis: AxisName,
-    rawValue: string,
-  ): void => {
-    const nextValue = Number(rawValue);
-
-    if (!Number.isFinite(nextValue)) {
-      return;
-    }
-
-    updateSelectedBox((box) => {
-      box.scale = {
-        ...box.scale,
-        [axis]: clampScaleValue(nextValue),
       };
       return box;
     });
@@ -982,139 +1115,10 @@ export default function App() {
               </button>
             </div>
             <p className="small">
-              Translação local do espaço: <code>X</code>, <code>Y</code> e{' '}
-              <code>Z</code> seguem a rotação atual do próprio objeto. Os
-              botões usam o passo configurado; o menu flutuante do mapa usa as
-              mesmas ações para mover, rotacionar e escalar por eixo.
+              As transformações agora ficam no menu flutuante sobre o mapa.
+              Ele replica posição, rotação e escala com abas e campos
+              numéricos por eixo.
             </p>
-
-            <div className="editorGroup">
-              <p className="groupLabel">Menu flutuante do mapa</p>
-              <div className="modeToggle">
-                {([
-                  ['translate', 'Mover'],
-                  ['rotate', 'Rotacionar'],
-                  ['scale', 'Escalar'],
-                ] as const).map(([mode, label]) => (
-                  <button
-                    className={mode === transformMode ? 'isActive' : ''}
-                    key={mode}
-                    onClick={() => setTransformMode(mode)}
-                    type="button"
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="editorGroup">
-              <p className="groupLabel">Posição</p>
-              <AxisControl
-                axis="x"
-                displayValue={`${selectedBox.position.lng.toFixed(7)} lng`}
-                onDecrement={() => adjustSelectedPosition('x', -1)}
-                onIncrement={() => adjustSelectedPosition('x', 1)}
-              />
-              <AxisControl
-                axis="y"
-                displayValue={`${selectedBox.position.lat.toFixed(7)} lat`}
-                onDecrement={() => adjustSelectedPosition('y', -1)}
-                onIncrement={() => adjustSelectedPosition('y', 1)}
-              />
-              <AxisControl
-                axis="z"
-                displayValue={`${selectedBox.position.altitude.toFixed(2)} m`}
-                onDecrement={() => adjustSelectedPosition('z', -1)}
-                onIncrement={() => adjustSelectedPosition('z', 1)}
-              />
-            </div>
-
-            <div className="editorGroup">
-              <p className="groupLabel">Rotação</p>
-              <AxisControl
-                axis="x"
-                displayValue={`${selectedBox.rotation.x.toFixed(2)} deg`}
-                onDecrement={() => adjustSelectedRotation('x', -1)}
-                onIncrement={() => adjustSelectedRotation('x', 1)}
-              />
-              <AxisControl
-                axis="y"
-                displayValue={`${selectedBox.rotation.y.toFixed(2)} deg`}
-                onDecrement={() => adjustSelectedRotation('y', -1)}
-                onIncrement={() => adjustSelectedRotation('y', 1)}
-              />
-              <AxisControl
-                axis="z"
-                displayValue={`${selectedBox.rotation.z.toFixed(2)} deg`}
-                onDecrement={() => adjustSelectedRotation('z', -1)}
-                onIncrement={() => adjustSelectedRotation('z', 1)}
-              />
-            </div>
-
-            <div className="editorGroup">
-              <p className="groupLabel">Escala</p>
-              <AxisControl
-                axis="x"
-                displayValue={`${selectedBox.scale.x.toFixed(2)} m`}
-                onDecrement={() => adjustSelectedScale('x', -1)}
-                onIncrement={() => adjustSelectedScale('x', 1)}
-              />
-              <AxisControl
-                axis="y"
-                displayValue={`${selectedBox.scale.y.toFixed(2)} m`}
-                onDecrement={() => adjustSelectedScale('y', -1)}
-                onIncrement={() => adjustSelectedScale('y', 1)}
-              />
-              <AxisControl
-                axis="z"
-                displayValue={`${selectedBox.scale.z.toFixed(2)} m`}
-                onDecrement={() => adjustSelectedScale('z', -1)}
-                onIncrement={() => adjustSelectedScale('z', 1)}
-              />
-            </div>
-
-            <div className="editorGroup">
-              <p className="groupLabel">Dimensões diretas</p>
-              <div className="dimensionGrid">
-                <label>
-                  Largura (X)
-                  <input
-                    min="0.5"
-                    onChange={(event) =>
-                      handleSelectedScaleFieldChange('x', event.target.value)
-                    }
-                    step="0.1"
-                    type="number"
-                    value={selectedBox.scale.x}
-                  />
-                </label>
-                <label>
-                  Profundidade (Y)
-                  <input
-                    min="0.5"
-                    onChange={(event) =>
-                      handleSelectedScaleFieldChange('y', event.target.value)
-                    }
-                    step="0.1"
-                    type="number"
-                    value={selectedBox.scale.y}
-                  />
-                </label>
-                <label>
-                  Altura (Z)
-                  <input
-                    min="0.5"
-                    onChange={(event) =>
-                      handleSelectedScaleFieldChange('z', event.target.value)
-                    }
-                    step="0.1"
-                    type="number"
-                    value={selectedBox.scale.z}
-                  />
-                </label>
-              </div>
-            </div>
 
             <div className="metricList small">
               <p>
@@ -1271,7 +1275,7 @@ export default function App() {
             {hoveredBox.name}
           </div>
         ) : null}
-        {selectedBox && floatingEditorPosition ? (
+        {selectedBox && floatingEditorPosition && floatingEditorDrafts ? (
           <div
             className="floatingEditor"
             onClick={(event) => event.stopPropagation()}
@@ -1320,14 +1324,36 @@ export default function App() {
                     onClick={() => handleFloatingTransformAction(axis, -1)}
                     type="button"
                   >
-                    {axis === 'x' ? '←' : axis === 'y' ? '↓' : '▾'}
+                    -
                   </button>
+                  <input
+                    inputMode="decimal"
+                    onBlur={() => resetFloatingDraft(transformMode, axis)}
+                    onChange={(event) =>
+                      handleFloatingDraftChange(
+                        transformMode,
+                        axis,
+                        event.target.value,
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        commitFloatingDraft(transformMode, axis);
+                      }
+
+                      if (event.key === 'Escape') {
+                        resetFloatingDraft(transformMode, axis);
+                      }
+                    }}
+                    type="text"
+                    value={floatingEditorDrafts[transformMode][axis]}
+                  />
                   <button
                     aria-label={`${label} positivo`}
                     onClick={() => handleFloatingTransformAction(axis, 1)}
                     type="button"
                   >
-                    {axis === 'x' ? '→' : axis === 'y' ? '↑' : '▴'}
+                    +
                   </button>
                 </div>
               ))}

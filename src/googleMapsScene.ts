@@ -11,6 +11,7 @@ import {
   type LatLngAltitude,
 } from './cameraUrlState';
 import { getBoxWorldCorners, pickBoxAtScreenPoint } from './boxMath';
+import { editorStore } from './editorStore';
 import { loadGoogleMaps3D } from './googleMapsLoader';
 
 const LOCK_BOUNDS_DELTA = 0.00008;
@@ -101,26 +102,15 @@ interface BoxRenderMeta {
 }
 
 export interface SceneController {
-  armBoxPlacement: () => void;
-  clearBoxPlacement: () => void;
   destroy: () => void;
   getCameraState: () => CameraState;
   getBoxes: () => BoxConfig[];
-  setBoxes: (boxes: BoxConfig[]) => void;
-  setCameraLocked: (locked: boolean) => void;
   setCameraState: (cameraState: CameraState) => void;
-  setSelectedBox: (boxId: string | null) => void;
 }
 
 interface InitializeSceneOptions {
-  initialBoxes?: BoxConfig[];
   initialCameraState?: CameraState;
-  initialSelectedBoxId?: string | null;
-  onBoxesChange?: (boxes: BoxConfig[]) => void;
   onCameraStateChange?: (cameraState: CameraState) => void;
-  onHoverBoxChange?: (boxId: string | null) => void;
-  onPlacementModeChange?: (armed: boolean) => void;
-  onSelectedBoxChange?: (boxId: string | null) => void;
 }
 
 interface BoxVisualStyle {
@@ -252,14 +242,13 @@ export async function initializeGoogleMapsScene(
   let fixedCameraState = cloneCameraState(
     options.initialCameraState ?? getDefaultCameraState(),
   );
-  let boxes = cloneBoxesConfig(options.initialBoxes ?? []);
-  let selectedBoxId = options.initialSelectedBoxId ?? null;
-  let hoveredBoxId: string | null = null;
-  let boxPlacementArmed = false;
-  let cameraLocked = false;
+  let boxes = cloneBoxesConfig(editorStore.getState().boxes);
+  let selectedBoxId = editorStore.getState().selectedSpaceId;
+  let hoveredBoxId = editorStore.getState().hoveredSpaceId;
+  let boxPlacementArmed = editorStore.getState().placementMode === 'placing-space';
+  let cameraLocked = editorStore.getState().cameraLocked;
   let enforcingCamera = false;
 
-  const altPressedRef = { current: false };
   const boxElements = new Map<string, BoxRenderMeta>();
 
   const map = new Map3DElement({
@@ -278,10 +267,6 @@ export async function initializeGoogleMapsScene(
 
   const syncCameraState = (): void => {
     options.onCameraStateChange?.(readCameraState(map, fixedCameraState));
-  };
-
-  const emitBoxesChange = (): void => {
-    options.onBoxesChange?.(cloneBoxesConfig(boxes));
   };
 
   const updateBoxStyles = (): void => {
@@ -313,7 +298,7 @@ export async function initializeGoogleMapsScene(
     }
 
     hoveredBoxId = boxId;
-    options.onHoverBoxChange?.(boxId);
+    editorStore.getState().setHoveredSpaceId(boxId);
     updateBoxStyles();
   };
 
@@ -323,23 +308,14 @@ export async function initializeGoogleMapsScene(
     }
 
     boxPlacementArmed = armed;
-    options.onPlacementModeChange?.(armed);
   };
 
-  const setSelectedBoxInternal = (
-    boxId: string | null,
-    emitChange: boolean,
-  ): void => {
+  const setSelectedBoxInternal = (boxId: string | null): void => {
     if (selectedBoxId === boxId) {
       return;
     }
 
     selectedBoxId = boxId;
-
-    if (emitChange) {
-      options.onSelectedBoxChange?.(boxId);
-    }
-
     updateBoxStyles();
   };
 
@@ -360,10 +336,9 @@ export async function initializeGoogleMapsScene(
       scale: { ...DEFAULT_BOX_SCALE },
     };
 
-    boxes = [...boxes, nextBox];
-    renderBoxes();
-    setSelectedBoxInternal(nextBox.id, true);
-    emitBoxesChange();
+    editorStore.getState().addSpace(nextBox);
+    editorStore.getState().selectSpace(nextBox.id, 'scene');
+    editorStore.getState().clearPlacementMode();
   };
 
   const handleFaceHoverEnter = (boxId: string) => (): void => {
@@ -384,24 +359,21 @@ export async function initializeGoogleMapsScene(
 
     const clickEvent = event as LocationClickEvent;
 
-    if ((altPressedRef.current || boxPlacementArmed) && clickEvent.position) {
+    if (boxPlacementArmed && clickEvent.position) {
       createBoxAtPosition(clickEvent.position);
-      setBoxPlacementArmed(false);
       return;
     }
 
-    setSelectedBoxInternal(boxId, true);
+    editorStore.getState().selectSpace(boxId, 'scene');
   };
 
   function renderBoxes(): void {
     if (selectedBoxId && !getBoxById(selectedBoxId, boxes)) {
-      selectedBoxId = null;
-      options.onSelectedBoxChange?.(null);
+      editorStore.getState().selectSpace(null, 'system');
     }
 
     if (hoveredBoxId && !getBoxById(hoveredBoxId, boxes)) {
-      hoveredBoxId = null;
-      options.onHoverBoxChange?.(null);
+      editorStore.getState().setHoveredSpaceId(null);
     }
 
     for (const meta of boxElements.values()) {
@@ -482,15 +454,14 @@ export async function initializeGoogleMapsScene(
   const handleMapClick = (event: Event): void => {
     const clickEvent = event as LocationClickEvent;
 
-    if ((altPressedRef.current || boxPlacementArmed) && clickEvent.position) {
+    if (boxPlacementArmed && clickEvent.position) {
       event.preventDefault();
       createBoxAtPosition(clickEvent.position);
-      setBoxPlacementArmed(false);
       return;
     }
 
     setHoveredBox(null);
-    setSelectedBoxInternal(null, true);
+    editorStore.getState().selectSpace(null, 'scene');
   };
 
   const handleCameraEvent = (): void => {
@@ -526,18 +497,6 @@ export async function initializeGoogleMapsScene(
     }, 0);
   };
 
-  const handleKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Alt') {
-      altPressedRef.current = true;
-    }
-  };
-
-  const handleKeyUp = (event: KeyboardEvent): void => {
-    if (event.key === 'Alt') {
-      altPressedRef.current = false;
-    }
-  };
-
   const handleContainerPointerMove = (event: PointerEvent): void => {
     const bounds = container.getBoundingClientRect();
     const nextHoveredBoxId = pickBoxAtScreenPoint(
@@ -571,54 +530,72 @@ export async function initializeGoogleMapsScene(
     map.addEventListener(eventName, handleCameraEvent);
   }
 
+  const unsubscribeBoxes = editorStore.subscribe(
+    (state) => state.boxes,
+    (nextBoxes) => {
+      boxes = cloneBoxesConfig(nextBoxes);
+      renderBoxes();
+    },
+  );
+  const unsubscribeSelectedSpace = editorStore.subscribe(
+    (state) => state.selectedSpaceId,
+    (nextSelectedBoxId) => {
+      setSelectedBoxInternal(nextSelectedBoxId);
+    },
+  );
+  const unsubscribeHoveredSpace = editorStore.subscribe(
+    (state) => state.hoveredSpaceId,
+    (nextHoveredBoxId) => {
+      hoveredBoxId = nextHoveredBoxId;
+      updateBoxStyles();
+    },
+  );
+  const unsubscribePlacementMode = editorStore.subscribe(
+    (state) => state.placementMode,
+    (nextPlacementMode) => {
+      setBoxPlacementArmed(nextPlacementMode === 'placing-space');
+    },
+  );
+  const unsubscribeCameraLocked = editorStore.subscribe(
+    (state) => state.cameraLocked,
+    (locked) => {
+      cameraLocked = locked;
+      applyCameraLock(map, fixedCameraState, locked);
+      syncCameraState();
+    },
+  );
+
   map.addEventListener('gmp-click', handleMapClick);
   container.addEventListener('pointermove', handleContainerPointerMove);
   container.addEventListener('pointerleave', handleContainerPointerLeave);
-  window.addEventListener('keydown', handleKeyDown);
-  window.addEventListener('keyup', handleKeyUp);
 
   applyCameraLock(map, fixedCameraState, cameraLocked);
   renderBoxes();
   syncCameraState();
 
   return {
-    armBoxPlacement: () => {
-      setBoxPlacementArmed(true);
-    },
-    clearBoxPlacement: () => {
-      setBoxPlacementArmed(false);
-    },
     destroy: () => {
       for (const eventName of cameraEvents) {
         map.removeEventListener(eventName, handleCameraEvent);
       }
 
+      unsubscribeBoxes();
+      unsubscribeSelectedSpace();
+      unsubscribeHoveredSpace();
+      unsubscribePlacementMode();
+      unsubscribeCameraLocked();
       map.removeEventListener('gmp-click', handleMapClick);
       container.removeEventListener('pointermove', handleContainerPointerMove);
       container.removeEventListener('pointerleave', handleContainerPointerLeave);
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
       container.replaceChildren();
     },
     getCameraState: () => readCameraState(map, fixedCameraState),
     getBoxes: () => cloneBoxesConfig(boxes),
-    setBoxes: (nextBoxes: BoxConfig[]) => {
-      boxes = cloneBoxesConfig(nextBoxes);
-      renderBoxes();
-    },
-    setCameraLocked: (locked: boolean) => {
-      cameraLocked = locked;
-      applyCameraLock(map, fixedCameraState, locked);
-      syncCameraState();
-    },
     setCameraState: (cameraState: CameraState) => {
       fixedCameraState = cloneCameraState(cameraState);
       applyCameraState(map, fixedCameraState);
       applyCameraLock(map, fixedCameraState, cameraLocked);
       syncCameraState();
-    },
-    setSelectedBox: (boxId: string | null) => {
-      setSelectedBoxInternal(boxId, false);
     },
   };
 }

@@ -19,7 +19,6 @@ import {
   cloneBoxConfig,
   cloneBoxesConfig,
   getBoxById,
-  initialBoxes,
   type BoxConfig,
 } from './config';
 import {
@@ -37,15 +36,10 @@ import {
   initializeGoogleMapsScene,
   type SceneController,
 } from './googleMapsScene';
+import { editorStore, useEditorStore } from './editorStore';
 
 type SceneStatus = 'loading' | 'ready' | 'error';
 type AxisName = 'x' | 'y' | 'z';
-
-interface ContextMenuState {
-  targetBoxId: string | null;
-  x: number;
-  y: number;
-}
 
 const MIN_FOCUS_RANGE = 22;
 const MAX_FOCUS_RANGE = 70;
@@ -201,19 +195,13 @@ function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewerShellRef = useRef<HTMLElement | null>(null);
   const sceneRef = useRef<SceneController | null>(null);
   const startupCameraState = parseCameraStateFromUrl() ?? getDefaultCameraState();
-  const startupNoCache = parseNoCacheFromUrl();
   const [defaultCameraState, setDefaultCameraState] =
     useState<CameraState>(startupCameraState);
-  const [boxes, setBoxes] = useState<BoxConfig[]>(() => cloneBoxesConfig(initialBoxes));
-  const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
-  const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
-  const [cameraLocked, setCameraLocked] = useState(false);
-  const [followCameraWithBox, setFollowCameraWithBox] = useState(false);
-  const [noCache, setNoCache] = useState(startupNoCache);
   const [positionStep, setPositionStep] = useState(1);
   const [rotationStep, setRotationStep] = useState(5);
   const [scaleStep, setScaleStep] = useState(1);
@@ -222,31 +210,47 @@ export default function App() {
   const [interactionHint, setInteractionHint] = useState('');
   const [isNameModalOpen, setIsNameModalOpen] = useState(false);
   const [pendingBoxName, setPendingBoxName] = useState('');
-  const [isBoxPlacementArmed, setIsBoxPlacementArmed] = useState(false);
-  const [contextMenuState, setContextMenuState] =
-    useState<ContextMenuState | null>(null);
   const [hoverTooltipPosition, setHoverTooltipPosition] = useState({
     x: 18,
     y: 18,
   });
   const [cameraUrl, setCameraUrl] = useState(() =>
-    buildUrlWithNoCache(
-      startupNoCache,
-      buildUrlWithCameraState(startupCameraState),
-    ),
+    buildUrlWithNoCache(parseNoCacheFromUrl(), buildUrlWithCameraState(startupCameraState)),
   );
+  const boxes = useEditorStore((state) => state.boxes);
+  const cameraLocked = useEditorStore((state) => state.cameraLocked);
+  const contextMenuState = useEditorStore((state) => state.contextMenu);
+  const followCameraWithBox = useEditorStore(
+    (state) => state.followCameraWithSpace,
+  );
+  const hoveredBoxId = useEditorStore((state) => state.hoveredSpaceId);
+  const isBoxPlacementArmed =
+    useEditorStore((state) => state.placementMode) === 'placing-space';
+  const noCache = useEditorStore((state) => state.noCache);
+  const pendingFocusBoxId = useEditorStore((state) => state.focusRequestSpaceId);
+  const selectedBoxId = useEditorStore((state) => state.selectedSpaceId);
+  const clearFocusRequest = useEditorStore((state) => state.clearFocusRequest);
+  const closeContextMenu = useEditorStore((state) => state.closeContextMenu);
+  const removeSpace = useEditorStore((state) => state.removeSpace);
+  const selectSpace = useEditorStore((state) => state.selectSpace);
+  const setBoxes = useEditorStore((state) => state.setBoxes);
+  const setCameraLocked = useEditorStore((state) => state.setCameraLocked);
+  const setFollowCameraWithBox = useEditorStore(
+    (state) => state.setFollowCameraWithSpace,
+  );
+  const setHoveredBoxId = useEditorStore((state) => state.setHoveredSpaceId);
+  const setNoCache = useEditorStore((state) => state.setNoCache);
+  const updateSpace = useEditorStore((state) => state.updateSpace);
+  const armPlacementMode = useEditorStore((state) => state.armPlacementMode);
+  const openContextMenu = useEditorStore((state) => state.openContextMenu);
   const cameraStateRef = useRef(defaultCameraState);
-  const boxesRef = useRef(boxes);
-  const noCacheRef = useRef(noCache);
-  const previousSelectedBoxIdRef = useRef<string | null>(null);
-  const pendingFocusBoxIdRef = useRef<string | null>(null);
   const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
 
   const selectedBox = selectedBoxId ? getBoxById(selectedBoxId, boxes) : undefined;
   const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
-  const contextMenuTargetBox = contextMenuState?.targetBoxId
-    ? getBoxById(contextMenuState.targetBoxId, boxes)
+  const contextMenuTargetBox = contextMenuState?.targetSpaceId
+    ? getBoxById(contextMenuState.targetSpaceId, boxes)
     : undefined;
   const sortedBoxes = [...boxes].sort((leftBox, rightBox) =>
     leftBox.name.localeCompare(rightBox.name, 'pt-BR', {
@@ -256,7 +260,7 @@ export default function App() {
 
   const syncUrl = (
     cameraState: CameraState = cameraStateRef.current,
-    nextNoCache: boolean = noCacheRef.current,
+    nextNoCache: boolean = editorStore.getState().noCache,
   ): string => {
     let nextUrl = buildUrlWithCameraState(cameraState);
     nextUrl = buildUrlWithNoCache(nextNoCache, nextUrl);
@@ -266,7 +270,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    syncUrl(defaultCameraState, startupNoCache);
+    syncUrl(defaultCameraState, noCache);
 
     return () => {
       if (cameraUrlFrameRef.current !== null) {
@@ -295,13 +299,7 @@ export default function App() {
         setErrorMessage('');
 
         controller = await initializeGoogleMapsScene(container, {
-          initialBoxes: boxesRef.current,
           initialCameraState: defaultCameraState,
-          initialSelectedBoxId: selectedBoxId,
-          onBoxesChange: (nextBoxes) => {
-            boxesRef.current = nextBoxes;
-            setBoxes(nextBoxes);
-          },
           onCameraStateChange: (cameraState) => {
             cameraStateRef.current = cameraState;
 
@@ -310,19 +308,9 @@ export default function App() {
             }
 
             cameraUrlFrameRef.current = window.requestAnimationFrame(() => {
-              syncUrl(cameraStateRef.current, noCacheRef.current);
+              syncUrl(cameraStateRef.current, editorStore.getState().noCache);
               cameraUrlFrameRef.current = null;
             });
-          },
-          onHoverBoxChange: (boxId) => {
-            setHoveredBoxId(boxId);
-          },
-          onPlacementModeChange: (armed) => {
-            setIsBoxPlacementArmed(armed);
-          },
-          onSelectedBoxChange: (boxId) => {
-            pendingFocusBoxIdRef.current = null;
-            setSelectedBoxId(boxId);
           },
         });
 
@@ -332,9 +320,6 @@ export default function App() {
         }
 
         sceneRef.current = controller;
-        controller.setCameraLocked(cameraLocked);
-        controller.setBoxes(boxesRef.current);
-        controller.setSelectedBox(selectedBoxId);
         setSceneStatus('ready');
       } catch (error) {
         if (!active) {
@@ -363,15 +348,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    boxesRef.current = boxes;
-    sceneRef.current?.setBoxes(boxes);
-  }, [boxes]);
-
-  useEffect(() => {
-    sceneRef.current?.setSelectedBox(selectedBoxId);
-  }, [selectedBoxId]);
-
-  useEffect(() => {
     if (!selectedBox) {
       setIsNameModalOpen(false);
       setPendingBoxName('');
@@ -383,25 +359,17 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedBoxId || sceneStatus !== 'ready') {
-      previousSelectedBoxIdRef.current = selectedBoxId;
-      pendingFocusBoxIdRef.current = null;
       return;
     }
 
-    if (previousSelectedBoxIdRef.current === selectedBoxId) {
-      return;
-    }
-
-    if (pendingFocusBoxIdRef.current !== selectedBoxId) {
-      previousSelectedBoxIdRef.current = selectedBoxId;
+    if (pendingFocusBoxId !== selectedBoxId) {
       return;
     }
 
     const selectedBoxFromState = getBoxById(selectedBoxId, boxes);
 
     if (!selectedBoxFromState) {
-      previousSelectedBoxIdRef.current = selectedBoxId;
-      pendingFocusBoxIdRef.current = null;
+      clearFocusRequest();
       return;
     }
 
@@ -414,22 +382,16 @@ export default function App() {
       ),
     };
 
-    previousSelectedBoxIdRef.current = selectedBoxId;
-    pendingFocusBoxIdRef.current = null;
+    clearFocusRequest();
     cameraStateRef.current = nextCameraState;
     setDefaultCameraState(nextCameraState);
     sceneRef.current?.setCameraState(nextCameraState);
-    syncUrl(nextCameraState, noCacheRef.current);
-  }, [boxes, sceneStatus, selectedBoxId]);
+    syncUrl(nextCameraState, editorStore.getState().noCache);
+  }, [boxes, clearFocusRequest, pendingFocusBoxId, sceneStatus, selectedBoxId]);
 
   useEffect(() => {
-    noCacheRef.current = noCache;
     syncUrl(cameraStateRef.current, noCache);
   }, [noCache]);
-
-  useEffect(() => {
-    sceneRef.current?.setCameraLocked(cameraLocked);
-  }, [cameraLocked]);
 
   useEffect(() => {
     sceneRef.current?.setCameraState(defaultCameraState);
@@ -487,25 +449,17 @@ export default function App() {
     cameraStateRef.current = nextCameraState;
     setDefaultCameraState(nextCameraState);
     sceneRef.current?.setCameraState(nextCameraState);
-    syncUrl(nextCameraState, noCacheRef.current);
+    syncUrl(nextCameraState, editorStore.getState().noCache);
   };
 
   const updateSelectedBox = (updater: (box: BoxConfig) => BoxConfig): void => {
-    if (!selectedBoxId) {
+    if (!selectedBoxId || !selectedBox) {
       return;
     }
 
-    const currentBox = getBoxById(selectedBoxId, boxesRef.current);
-
-    if (!currentBox) {
-      return;
-    }
-
-    const nextBox = updater(cloneBoxConfig(currentBox));
-
-    setBoxes((currentBoxes) =>
-      currentBoxes.map((box) => (box.id === selectedBoxId ? nextBox : box)),
-    );
+    const currentBox = cloneBoxConfig(selectedBox);
+    const nextBox = updater(cloneBoxConfig(selectedBox));
+    updateSpace(selectedBoxId, () => nextBox);
 
     if (followCameraWithBox) {
       syncTrackedCameraForBoxChange(currentBox, nextBox);
@@ -570,11 +524,7 @@ export default function App() {
       return;
     }
 
-    setBoxes((currentBoxes) =>
-      currentBoxes.filter((box) => box.id !== selectedBoxId),
-    );
-    setSelectedBoxId(null);
-    setHoveredBoxId(null);
+    removeSpace(selectedBoxId);
   };
 
   const handleOpenNameModal = (): void => {
@@ -599,39 +549,27 @@ export default function App() {
 
     const bounds = viewerElement.getBoundingClientRect();
 
-    setContextMenuState({
-      targetBoxId: hoveredBoxId,
+    openContextMenu({
+      targetSpaceId: hoveredBoxId,
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
   };
 
   const handleArmBoxPlacement = (): void => {
-    sceneRef.current?.armBoxPlacement();
-    setContextMenuState(null);
+    armPlacementMode();
     showHint('Clique esquerdo no mapa para posicionar o novo espaço.');
   };
 
   const handleRemoveContextTargetBox = (): void => {
-    const targetBoxId = contextMenuState?.targetBoxId;
+    const targetBoxId = contextMenuState?.targetSpaceId;
 
     if (!targetBoxId) {
       return;
     }
 
-    setBoxes((currentBoxes) =>
-      currentBoxes.filter((box) => box.id !== targetBoxId),
-    );
-
-    if (selectedBoxId === targetBoxId) {
-      setSelectedBoxId(null);
-    }
-
-    if (hoveredBoxId === targetBoxId) {
-      setHoveredBoxId(null);
-    }
-
-    setContextMenuState(null);
+    removeSpace(targetBoxId);
+    closeContextMenu();
   };
 
   const handleSaveBoxName = (): void => {
@@ -685,14 +623,15 @@ export default function App() {
       }
 
       setBoxes(cloneBoxesConfig(nextBoxes));
-      setSelectedBoxId(null);
+      selectSpace(null, 'system');
       setHoveredBoxId(null);
+      closeContextMenu();
 
       if (isCameraState(parsed.cameraState)) {
         setDefaultCameraState(parsed.cameraState);
         cameraStateRef.current = parsed.cameraState;
         sceneRef.current?.setCameraState(parsed.cameraState);
-        syncUrl(parsed.cameraState, noCacheRef.current);
+        syncUrl(parsed.cameraState, editorStore.getState().noCache);
       }
 
       setSceneStatus('ready');
@@ -773,7 +712,7 @@ export default function App() {
           <button
             onClick={() =>
               window.location.assign(
-                buildNoCacheReloadUrl(noCacheRef.current, window.location.href),
+                buildNoCacheReloadUrl(noCache, window.location.href),
               )
             }
             type="button"
@@ -806,8 +745,7 @@ export default function App() {
               id="boxSelect"
               onChange={(event) => {
                 const nextBoxId = event.target.value ? event.target.value : null;
-                pendingFocusBoxIdRef.current = nextBoxId;
-                setSelectedBoxId(nextBoxId);
+                selectSpace(nextBoxId, 'sidebar');
               }}
               value={selectedBoxId ?? ''}
             >
@@ -820,10 +758,7 @@ export default function App() {
             </select>
             <button
               disabled={!selectedBoxId}
-              onClick={() => {
-                pendingFocusBoxIdRef.current = null;
-                setSelectedBoxId(null);
-              }}
+              onClick={() => selectSpace(null, 'system')}
               type="button"
             >
               Limpar
@@ -1060,8 +995,17 @@ export default function App() {
         className="viewerShell"
         onContextMenu={handleOpenContextMenu}
         onPointerDownCapture={(event) => {
+          const target = event.target;
+
+          if (
+            target instanceof HTMLElement &&
+            contextMenuRef.current?.contains(target)
+          ) {
+            return;
+          }
+
           if (event.button === 0) {
-            setContextMenuState(null);
+            closeContextMenu();
           }
         }}
         onPointerMove={handleViewerPointerMove}
@@ -1092,6 +1036,7 @@ export default function App() {
           <div
             className="contextMenu"
             onClick={(event) => event.stopPropagation()}
+            ref={contextMenuRef}
             style={{
               left: `${contextMenuState.x}px`,
               top: `${contextMenuState.y}px`,

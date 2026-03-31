@@ -200,10 +200,7 @@ function shouldBlockMapInteraction(state: {
   selectedSpaceId: string | null;
   transformDragging: boolean;
 }): boolean {
-  return (
-    state.transformDragging ||
-    (state.selectedSpaceId !== null && state.placementMode === 'idle')
-  );
+  return state.transformDragging;
 }
 
 function getBoxVisualStyle(

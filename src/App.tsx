@@ -6,17 +6,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import Moveable, {
-  type OnDrag,
-  type OnDragEnd,
-  type OnDragStart,
-  type OnRotate,
-  type OnRotateEnd,
-  type OnRotateStart,
-  type OnScale,
-  type OnScaleEnd,
-  type OnScaleStart,
-} from 'react-moveable';
 import {
   buildNoCacheReloadUrl,
   buildUrlWithCameraState,
@@ -40,11 +29,8 @@ import {
   getOffsetFromPosition,
   inverseRotateLocalPoint,
   normalizeDegrees,
-  projectBoxFootprintToScreen,
   rotateLocalPoint,
-  solveLocalMetersFromScreenDelta,
   translatePosition,
-  type BoxFootprintProjection,
 } from './boxMath';
 import {
   initializeGoogleMapsScene,
@@ -65,6 +51,11 @@ interface LayoutSnapshot {
   cameraState: CameraState;
   exportedAt: string;
   version: 3;
+}
+
+interface FloatingEditorPosition {
+  x: number;
+  y: number;
 }
 
 interface AxisControlProps {
@@ -221,40 +212,21 @@ function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   return Math.min(currentRange, targetRange);
 }
 
-function snapValue(value: number, step: number): number {
-  if (!Number.isFinite(value) || step <= 0) {
-    return value;
-  }
-
-  return Math.round(value / step) * step;
-}
-
-function getMoveableScaleFromScreen(
-  basePixelsPerMeter: number,
-  nextPixelsPerMeter: number,
-  baseMeters: number,
-): number {
-  if (
-    !Number.isFinite(basePixelsPerMeter) ||
-    !Number.isFinite(nextPixelsPerMeter) ||
-    basePixelsPerMeter <= 0
-  ) {
-    return baseMeters;
-  }
-
-  return clampScaleValue(baseMeters * (nextPixelsPerMeter / basePixelsPerMeter));
-}
-
-interface MoveableGestureState {
-  projection: BoxFootprintProjection;
-  startBox: BoxConfig;
-}
+const FLOATING_EDITOR_WIDTH = 252;
+const FLOATING_EDITOR_HEIGHT = 238;
+const FLOATING_EDITOR_MARGIN = 14;
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const moveableRef = useRef<Moveable | null>(null);
+  const floatingEditorRef = useRef<HTMLDivElement | null>(null);
+  const lastViewerPrimaryPointerRef = useRef<{
+    timestamp: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const previousSelectedBoxIdRef = useRef<string | null>(null);
   const viewerShellRef = useRef<HTMLElement | null>(null);
   const sceneRef = useRef<SceneController | null>(null);
   const startupCameraState = parseCameraStateFromUrl() ?? getDefaultCameraState();
@@ -272,12 +244,8 @@ export default function App() {
   const [cameraUrl, setCameraUrl] = useState(() =>
     buildUrlWithNoCache(parseNoCacheFromUrl(), buildUrlWithCameraState(startupCameraState)),
   );
-  const [viewerViewport, setViewerViewport] = useState({
-    height: 0,
-    width: 0,
-  });
-  const [moveableTargetElement, setMoveableTargetElement] =
-    useState<HTMLDivElement | null>(null);
+  const [floatingEditorPosition, setFloatingEditorPosition] =
+    useState<FloatingEditorPosition | null>(null);
   const boxes = useEditorStore((state) => state.boxes);
   const cameraLocked = useEditorStore((state) => state.cameraLocked);
   const contextMenuState = useEditorStore((state) => state.contextMenu);
@@ -294,9 +262,6 @@ export default function App() {
   const scaleStep = useEditorStore((state) => state.scaleStep);
   const selectedBoxId = useEditorStore((state) => state.selectedSpaceId);
   const transformMode = useEditorStore((state) => state.transformMode);
-  const transformSnapEnabled = useEditorStore(
-    (state) => state.transformSnapEnabled,
-  );
   const clearFocusRequest = useEditorStore((state) => state.clearFocusRequest);
   const closeContextMenu = useEditorStore((state) => state.closeContextMenu);
   const removeSpace = useEditorStore((state) => state.removeSpace);
@@ -311,13 +276,7 @@ export default function App() {
   const setPositionStep = useEditorStore((state) => state.setPositionStep);
   const setRotationStep = useEditorStore((state) => state.setRotationStep);
   const setScaleStep = useEditorStore((state) => state.setScaleStep);
-  const setTransformDragging = useEditorStore(
-    (state) => state.setTransformDragging,
-  );
   const setTransformMode = useEditorStore((state) => state.setTransformMode);
-  const setTransformSnapEnabled = useEditorStore(
-    (state) => state.setTransformSnapEnabled,
-  );
   const updateSpace = useEditorStore((state) => state.updateSpace);
   const armPlacementMode = useEditorStore((state) => state.armPlacementMode);
   const openContextMenu = useEditorStore((state) => state.openContextMenu);
@@ -335,15 +294,6 @@ export default function App() {
       sensitivity: 'base',
     }),
   );
-  const selectedBoxProjection =
-    selectedBox && viewerViewport.width > 0 && viewerViewport.height > 0
-      ? projectBoxFootprintToScreen(
-          selectedBox,
-          cameraStateRef.current,
-          viewerViewport.width,
-          viewerViewport.height,
-        )
-      : null;
 
   const syncUrl = (
     cameraState: CameraState = cameraStateRef.current,
@@ -437,46 +387,65 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
+  const placeFloatingEditor = (x: number, y: number): void => {
     const viewerElement = viewerShellRef.current;
 
     if (!viewerElement) {
       return;
     }
 
-    const syncViewerViewport = (): void => {
-      const bounds = viewerElement.getBoundingClientRect();
+    const bounds = viewerElement.getBoundingClientRect();
 
-      setViewerViewport({
-        height: bounds.height,
-        width: bounds.width,
-      });
-    };
-
-    syncViewerViewport();
-
-    const resizeObserver = new ResizeObserver(syncViewerViewport);
-    resizeObserver.observe(viewerElement);
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    moveableRef.current?.updateRect();
-  }, [moveableTargetElement, selectedBoxProjection, transformMode]);
+    setFloatingEditorPosition({
+      x: Math.min(
+        Math.max(x + 12, FLOATING_EDITOR_MARGIN),
+        Math.max(
+          FLOATING_EDITOR_MARGIN,
+          bounds.width - FLOATING_EDITOR_WIDTH - FLOATING_EDITOR_MARGIN,
+        ),
+      ),
+      y: Math.min(
+        Math.max(y + 12, FLOATING_EDITOR_MARGIN),
+        Math.max(
+          FLOATING_EDITOR_MARGIN,
+          bounds.height - FLOATING_EDITOR_HEIGHT - FLOATING_EDITOR_MARGIN,
+        ),
+      ),
+    });
+  };
 
   useEffect(() => {
     if (!selectedBox) {
       setIsNameModalOpen(false);
       setPendingBoxName('');
-      setTransformDragging(false);
       return;
     }
 
     setPendingBoxName(selectedBox.name);
-  }, [selectedBox, setTransformDragging]);
+  }, [selectedBox]);
+
+  useEffect(() => {
+    const previousSelectedBoxId = previousSelectedBoxIdRef.current;
+    previousSelectedBoxIdRef.current = selectedBoxId;
+
+    if (!selectedBoxId) {
+      setFloatingEditorPosition(null);
+      return;
+    }
+
+    if (previousSelectedBoxId === selectedBoxId) {
+      return;
+    }
+
+    const lastPointer = lastViewerPrimaryPointerRef.current;
+
+    if (lastPointer && Date.now() - lastPointer.timestamp < 1200) {
+      placeFloatingEditor(lastPointer.x, lastPointer.y);
+      return;
+    }
+
+    setFloatingEditorPosition(null);
+  }, [selectedBoxId]);
 
   useEffect(() => {
     if (!selectedBoxId || sceneStatus !== 'ready') {
@@ -617,163 +586,6 @@ export default function App() {
     updateSpace(selectedBoxId, () => nextBox);
   };
 
-  const handleMoveableDragStart = (event: OnDragStart): void => {
-    if (!selectedBox || !selectedBoxProjection) {
-      event.stopAble();
-      return;
-    }
-
-    const datas = event.datas as MoveableGestureState;
-    datas.projection = selectedBoxProjection;
-    datas.startBox = cloneBoxConfig(selectedBox);
-    setTransformDragging(true);
-  };
-
-  const handleMoveableDrag = (event: OnDrag): void => {
-    if (!selectedBoxId) {
-      return;
-    }
-
-    const datas = event.datas as Partial<MoveableGestureState>;
-
-    if (!datas.startBox || !datas.projection) {
-      return;
-    }
-
-    const startBox = datas.startBox;
-    const projection = datas.projection;
-
-    const localDelta = solveLocalMetersFromScreenDelta(
-      {
-        x: event.beforeTranslate[0],
-        y: event.beforeTranslate[1],
-      },
-      projection.xAxisPerMeter,
-      projection.yAxisPerMeter,
-    );
-
-    if (!localDelta) {
-      return;
-    }
-
-    const nextLocalDelta = {
-      x: transformSnapEnabled ? snapValue(localDelta.x, positionStep) : localDelta.x,
-      y: transformSnapEnabled ? snapValue(localDelta.y, positionStep) : localDelta.y,
-      z: 0,
-    };
-    const worldOffset = rotateLocalPoint(nextLocalDelta, startBox.rotation);
-
-    updateSpace(selectedBoxId, () => ({
-      ...cloneBoxConfig(startBox),
-      position: translatePosition(
-        startBox.position,
-        worldOffset.x,
-        worldOffset.y,
-        worldOffset.z,
-      ),
-    }));
-  };
-
-  const handleMoveableDragEnd = (_event: OnDragEnd): void => {
-    setTransformDragging(false);
-  };
-
-  const handleMoveableRotateStart = (event: OnRotateStart): void => {
-    if (!selectedBox || !selectedBoxProjection) {
-      event.stopAble();
-      return;
-    }
-
-    const datas = event.datas as MoveableGestureState;
-    datas.projection = selectedBoxProjection;
-    datas.startBox = cloneBoxConfig(selectedBox);
-    setTransformDragging(true);
-  };
-
-  const handleMoveableRotate = (event: OnRotate): void => {
-    if (!selectedBoxId) {
-      return;
-    }
-
-    const datas = event.datas as Partial<MoveableGestureState>;
-
-    if (!datas.startBox) {
-      return;
-    }
-
-    const startBox = datas.startBox;
-    const rawRotation = startBox.rotation.z + event.beforeDist;
-    const nextRotation = transformSnapEnabled
-      ? snapValue(rawRotation, rotationStep)
-      : rawRotation;
-
-    updateSpace(selectedBoxId, () => ({
-      ...cloneBoxConfig(startBox),
-      rotation: {
-        ...startBox.rotation,
-        z: normalizeDegrees(nextRotation),
-      },
-    }));
-  };
-
-  const handleMoveableRotateEnd = (_event: OnRotateEnd): void => {
-    setTransformDragging(false);
-  };
-
-  const handleMoveableScaleStart = (event: OnScaleStart): void => {
-    if (!selectedBox || !selectedBoxProjection) {
-      event.stopAble();
-      return;
-    }
-
-    const datas = event.datas as MoveableGestureState;
-    datas.projection = selectedBoxProjection;
-    datas.startBox = cloneBoxConfig(selectedBox);
-    setTransformDragging(true);
-  };
-
-  const handleMoveableScale = (event: OnScale): void => {
-    if (!selectedBoxId) {
-      return;
-    }
-
-    const datas = event.datas as Partial<MoveableGestureState>;
-
-    if (!datas.startBox || !datas.projection) {
-      return;
-    }
-
-    const startBox = datas.startBox;
-    const projection = datas.projection;
-    const nextScaleX = getMoveableScaleFromScreen(
-      projection.widthPx / startBox.scale.x,
-      (projection.widthPx * event.scale[0]) / startBox.scale.x,
-      startBox.scale.x,
-    );
-    const nextScaleY = getMoveableScaleFromScreen(
-      projection.heightPx / startBox.scale.y,
-      (projection.heightPx * event.scale[1]) / startBox.scale.y,
-      startBox.scale.y,
-    );
-
-    updateSpace(selectedBoxId, () => ({
-      ...cloneBoxConfig(startBox),
-      scale: {
-        ...startBox.scale,
-        x: clampScaleValue(
-          transformSnapEnabled ? snapValue(nextScaleX, scaleStep) : nextScaleX,
-        ),
-        y: clampScaleValue(
-          transformSnapEnabled ? snapValue(nextScaleY, scaleStep) : nextScaleY,
-        ),
-      },
-    }));
-  };
-
-  const handleMoveableScaleEnd = (_event: OnScaleEnd): void => {
-    setTransformDragging(false);
-  };
-
   const adjustSelectedPosition = (
     axis: AxisName,
     direction: -1 | 1,
@@ -799,6 +611,23 @@ export default function App() {
 
       return box;
     });
+  };
+
+  const handleFloatingTransformAction = (
+    axis: AxisName,
+    direction: -1 | 1,
+  ): void => {
+    if (transformMode === 'translate') {
+      adjustSelectedPosition(axis, direction);
+      return;
+    }
+
+    if (transformMode === 'rotate') {
+      adjustSelectedRotation(axis, direction);
+      return;
+    }
+
+    adjustSelectedScale(axis, direction);
   };
 
   const adjustSelectedRotation = (
@@ -989,16 +818,12 @@ export default function App() {
       y: event.clientY - bounds.top + 14,
     });
   };
-
-  const moveableTargetStyle = selectedBoxProjection
-    ? {
-        height: `${selectedBoxProjection.heightPx}px`,
-        left: `${selectedBoxProjection.center.x - selectedBoxProjection.widthPx / 2}px`,
-        top: `${selectedBoxProjection.center.y - selectedBoxProjection.heightPx / 2}px`,
-        transform: `rotate(${selectedBoxProjection.angleDeg}deg)`,
-        width: `${selectedBoxProjection.widthPx}px`,
-      }
-    : undefined;
+  const activeTransformStep =
+    transformMode === 'translate'
+      ? formatStepValue(positionStep, 'm')
+      : transformMode === 'rotate'
+        ? formatStepValue(rotationStep, 'deg')
+        : formatStepValue(scaleStep, 'm');
 
   return (
     <div className="layout">
@@ -1008,11 +833,10 @@ export default function App() {
           Use <strong>clique direito</strong> no mapa para abrir o menu de
           contexto e escolher <strong>Adicionar espaço</strong>. Depois, use{' '}
           <strong>clique esquerdo</strong> para posicionar o espaço. Quando um
-          espaço estiver selecionado, use o gizmo DOM sobre o mapa para mover,
-          rotacionar e escalar a footprint do espaço. A camada por mouse atua
-          em <strong>X/Y local</strong> e <strong>rotação Z</strong>; altura,
-          escala Z e rotações X/Y continuam no painel. Enquanto o gizmo estiver
-          ativo, a navegação do Google Maps por mouse fica desativada.
+          espaço estiver selecionado pelo mapa, abre um menu flutuante perto do
+          clique com abas de <strong>Translação</strong>,{' '}
+          <strong>Rotação</strong> e <strong>Escala</strong>. As ações usam os
+          passos configurados abaixo e continuam disponíveis também no painel.
         </p>
 
         <div className="section">
@@ -1147,14 +971,6 @@ export default function App() {
               />
             </label>
           </div>
-          <label className="row rowCompact">
-            <input
-              checked={transformSnapEnabled}
-              onChange={(event) => setTransformSnapEnabled(event.target.checked)}
-              type="checkbox"
-            />
-            Snap do gizmo usando os passos acima
-          </label>
         </div>
 
         {selectedBox ? (
@@ -1168,13 +984,12 @@ export default function App() {
             <p className="small">
               Translação local do espaço: <code>X</code>, <code>Y</code> e{' '}
               <code>Z</code> seguem a rotação atual do próprio objeto. Os
-              botões usam o passo em metros; o gizmo do mapa usa esse snap para
-              mover em <code>X/Y</code>, rotacionar em <code>Z</code> e escalar
-              a footprint em <code>X/Y</code>.
+              botões usam o passo configurado; o menu flutuante do mapa usa as
+              mesmas ações para mover, rotacionar e escalar por eixo.
             </p>
 
             <div className="editorGroup">
-              <p className="groupLabel">Gizmo do mapa</p>
+              <p className="groupLabel">Menu flutuante do mapa</p>
               <div className="modeToggle">
                 {([
                   ['translate', 'Mover'],
@@ -1411,12 +1226,24 @@ export default function App() {
 
           if (
             target instanceof HTMLElement &&
-            contextMenuRef.current?.contains(target)
+            (contextMenuRef.current?.contains(target) ||
+              floatingEditorRef.current?.contains(target))
           ) {
             return;
           }
 
           if (event.button === 0) {
+            const viewerElement = viewerShellRef.current;
+
+            if (viewerElement) {
+              const bounds = viewerElement.getBoundingClientRect();
+              lastViewerPrimaryPointerRef.current = {
+                timestamp: Date.now(),
+                x: event.clientX - bounds.left,
+                y: event.clientY - bounds.top,
+              };
+            }
+
             closeContextMenu();
           }
         }}
@@ -1429,44 +1256,6 @@ export default function App() {
         }}
         ref={viewerShellRef}
       >
-        <div className="moveableOverlayLayer">
-          {selectedBox && selectedBoxProjection ? (
-            <>
-              <div
-                className="moveableTarget"
-                ref={setMoveableTargetElement}
-                style={moveableTargetStyle}
-              />
-              <Moveable
-                draggable={transformMode === 'translate'}
-                keepRatio={false}
-                origin={false}
-                preventClickEventOnDrag={true}
-                preventDefault={true}
-                preventRightClick={false}
-                ref={moveableRef}
-                renderDirections={
-                  transformMode === 'scale'
-                    ? ['n', 'e', 's', 'w', 'nw', 'ne', 'se', 'sw']
-                    : false
-                }
-                rotatable={transformMode === 'rotate'}
-                rotationPosition="top"
-                scalable={transformMode === 'scale'}
-                target={moveableTargetElement}
-                onDrag={handleMoveableDrag}
-                onDragEnd={handleMoveableDragEnd}
-                onDragStart={handleMoveableDragStart}
-                onRotate={handleMoveableRotate}
-                onRotateEnd={handleMoveableRotateEnd}
-                onRotateStart={handleMoveableRotateStart}
-                onScale={handleMoveableScale}
-                onScaleEnd={handleMoveableScaleEnd}
-                onScaleStart={handleMoveableScaleStart}
-              />
-            </>
-          ) : null}
-        </div>
         {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
         {isBoxPlacementArmed ? (
           <div className="placementBadge">Adicionar espaço: clique no mapa</div>
@@ -1480,6 +1269,69 @@ export default function App() {
             }}
           >
             {hoveredBox.name}
+          </div>
+        ) : null}
+        {selectedBox && floatingEditorPosition ? (
+          <div
+            className="floatingEditor"
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            ref={floatingEditorRef}
+            style={{
+              left: `${floatingEditorPosition.x}px`,
+              top: `${floatingEditorPosition.y}px`,
+            }}
+          >
+            <div className="floatingEditorHeader">
+              <strong>{selectedBox.name}</strong>
+              <span>{activeTransformStep}</span>
+            </div>
+            <div className="floatingEditorTabs modeToggle">
+              {([
+                ['translate', 'Translação'],
+                ['rotate', 'Rotação'],
+                ['scale', 'Escala'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  className={mode === transformMode ? 'isActive' : ''}
+                  key={mode}
+                  onClick={() => setTransformMode(mode)}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="floatingAxisGrid">
+              {([
+                ['x', 'X'],
+                ['y', 'Y'],
+                ['z', 'Z'],
+              ] as const).map(([axis, label]) => (
+                <div className="floatingAxisRow" key={axis}>
+                  <span>{label}</span>
+                  <button
+                    aria-label={`${label} negativo`}
+                    onClick={() => handleFloatingTransformAction(axis, -1)}
+                    type="button"
+                  >
+                    {axis === 'x' ? '←' : axis === 'y' ? '↓' : '▾'}
+                  </button>
+                  <button
+                    aria-label={`${label} positivo`}
+                    onClick={() => handleFloatingTransformAction(axis, 1)}
+                    type="button"
+                  >
+                    {axis === 'x' ? '→' : axis === 'y' ? '↑' : '▴'}
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
         {contextMenuState ? (

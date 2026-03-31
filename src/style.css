@@ -275,41 +275,62 @@ textarea {
   background: #020617;
 }
 
-.moveableOverlayLayer {
+.floatingEditor {
   position: absolute;
-  inset: 0;
-  z-index: 18;
-  pointer-events: none;
+  z-index: 29;
+  width: 252px;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
 }
 
-.moveableTarget {
-  position: absolute;
-  border: 1px dashed rgba(250, 204, 21, 0.9);
-  border-radius: 8px;
-  background: rgba(250, 204, 21, 0.08);
-  box-shadow:
-    0 0 0 1px rgba(15, 23, 42, 0.45),
-    inset 0 0 0 1px rgba(250, 204, 21, 0.18);
-  pointer-events: auto;
-  transform-origin: center center;
+.floatingEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
-.moveable-control-box {
-  z-index: 19;
-  pointer-events: auto;
+.floatingEditorHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.moveable-control-box .moveable-line {
-  background: rgba(250, 204, 21, 0.75);
+.floatingEditorHeader span {
+  color: #fcd34d;
+  font-size: 0.84rem;
+  white-space: nowrap;
 }
 
-.moveable-control-box .moveable-control {
-  border-color: rgba(250, 204, 21, 0.9);
-  background: #facc15;
+.floatingEditorTabs {
+  margin-bottom: 10px;
 }
 
-.moveable-control-box .moveable-rotation-control {
-  background: #fb923c;
+.floatingAxisGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.floatingAxisRow {
+  display: grid;
+  grid-template-columns: 28px 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.floatingAxisRow span {
+  text-align: center;
+  color: #fde68a;
+  font-weight: 600;
+}
+
+.floatingAxisRow button {
+  padding: 10px 8px;
 }
 
 #mapContainer > gmp-map-3d {

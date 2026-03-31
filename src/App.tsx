@@ -1196,7 +1196,13 @@ export default function App() {
         {contextMenuState ? (
           <div
             className="contextMenu"
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
             onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
             ref={contextMenuRef}
             style={{
               left: `${contextMenuState.x}px`,

@@ -44,6 +44,8 @@ interface InitializeThreeEditorOverlayOptions {
   viewerElement: HTMLElement;
 }
 
+type TransformPointer = NonNullable<Parameters<TransformControls['pointerMove']>[0]>;
+
 function createUnitBoxGeometry(): THREE.BoxGeometry {
   const geometry = new THREE.BoxGeometry(1, 1, 1);
 
@@ -146,7 +148,7 @@ export function initializeThreeEditorOverlay(
   const boxObjects = new Map<string, BoxObjectMeta>();
   const sharedGeometry = createUnitBoxGeometry();
   const sharedEdgesGeometry = new THREE.EdgesGeometry(sharedGeometry);
-  const transformControls = new TransformControls(camera, options.viewerElement);
+  const transformControls = new TransformControls(camera);
   const transformHelper = transformControls.getHelper();
 
   let boxes = cloneBoxesConfig(editorStore.getState().boxes);
@@ -161,6 +163,7 @@ export function initializeThreeEditorOverlay(
   let transformDragging = editorStore.getState().transformDragging;
   let cameraState = cloneCameraState(options.initialCameraState);
   let syncingFromStore = false;
+  let activeTransformPointerId: number | null = null;
   let renderFrameId: number | null = null;
 
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -223,6 +226,25 @@ export function initializeThreeEditorOverlay(
     pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
     return true;
   };
+
+  const createTransformPointer = (
+    event: PointerEvent,
+  ): TransformPointer | null => {
+    const bounds = container.getBoundingClientRect();
+
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      return null;
+    }
+
+    return {
+      button: event.button,
+      x: ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+      y: -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+    } as unknown as TransformPointer;
+  };
+
+  const isSceneSurfaceEventTarget = (target: EventTarget | null): boolean =>
+    target instanceof Node && container.contains(target);
 
   const pickBoxIdAtPointer = (): string | null => {
     const meshes = [...boxObjects.values()].map((meta) => meta.mesh);
@@ -425,8 +447,22 @@ export function initializeThreeEditorOverlay(
     editorStore.getState().updateSpace(boxId, () => nextBox);
   };
 
-  const handlePointerDown = (event: PointerEvent): void => {
+  const finishTransformInteraction = (pointer: TransformPointer | null): void => {
+    if (activeTransformPointerId === null && !transformControls.dragging) {
+      return;
+    }
+
+    activeTransformPointerId = null;
+    transformControls.pointerUp(pointer);
+    scheduleRender();
+  };
+
+  const handleViewerPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0 || placementMode !== 'idle') {
+      return;
+    }
+
+    if (!isSceneSurfaceEventTarget(event.target)) {
       return;
     }
 
@@ -434,8 +470,19 @@ export function initializeThreeEditorOverlay(
       return;
     }
 
-    if (isTransformHandleHit()) {
+    const transformPointer = createTransformPointer(event);
+
+    if (!transformPointer) {
+      return;
+    }
+
+    transformControls.pointerHover(transformPointer);
+
+    if (isTransformHandleHit() || transformControls.axis !== null) {
+      activeTransformPointerId = event.pointerId;
       editorStore.getState().blockNextMapClick();
+      transformControls.pointerDown(transformPointer);
+      scheduleRender();
       return;
     }
 
@@ -449,9 +496,19 @@ export function initializeThreeEditorOverlay(
     editorStore.getState().selectSpace(hitBoxId, 'scene');
   };
 
-  const handlePointerMove = (event: PointerEvent): void => {
-    if (transformDragging || !updatePointerFromEvent(event)) {
+  const handleViewerPointerMove = (event: PointerEvent): void => {
+    if (activeTransformPointerId !== null) {
       return;
+    }
+
+    if (!isSceneSurfaceEventTarget(event.target) || !updatePointerFromEvent(event)) {
+      return;
+    }
+
+    const transformPointer = createTransformPointer(event);
+
+    if (transformPointer) {
+      transformControls.pointerHover(transformPointer);
     }
 
     const nextHoveredBoxId = pickBoxIdAtPointer();
@@ -463,12 +520,70 @@ export function initializeThreeEditorOverlay(
     editorStore.getState().setHoveredSpaceId(nextHoveredBoxId);
   };
 
-  const handlePointerLeave = (): void => {
-    if (editorStore.getState().transformDragging) {
+  const handleGlobalPointerMove = (event: PointerEvent): void => {
+    if (
+      activeTransformPointerId === null ||
+      event.pointerId !== activeTransformPointerId
+    ) {
       return;
     }
 
+    const transformPointer = createTransformPointer(event);
+
+    if (!transformPointer) {
+      return;
+    }
+
+    transformControls.pointerMove(transformPointer);
+    scheduleRender();
+  };
+
+  const handleGlobalPointerUp = (event: PointerEvent): void => {
+    if (
+      activeTransformPointerId === null ||
+      event.pointerId !== activeTransformPointerId
+    ) {
+      return;
+    }
+
+    finishTransformInteraction(createTransformPointer(event));
+  };
+
+  const handleGlobalPointerCancel = (event: PointerEvent): void => {
+    if (
+      activeTransformPointerId === null ||
+      event.pointerId !== activeTransformPointerId
+    ) {
+      return;
+    }
+
+    finishTransformInteraction(createTransformPointer(event));
+  };
+
+  const handleVisibilityChange = (): void => {
+    if (document.visibilityState === 'hidden') {
+      finishTransformInteraction(null);
+    }
+  };
+
+  const handleWindowBlur = (): void => {
+    finishTransformInteraction(null);
+  };
+
+  const handleWindowKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') {
+      finishTransformInteraction(null);
+    }
+  };
+
+  const handleViewerPointerLeave = (): void => {
+    if (activeTransformPointerId !== null || editorStore.getState().transformDragging) {
+      return;
+    }
+
+    transformControls.axis = null;
     editorStore.getState().setHoveredSpaceId(null);
+    scheduleRender();
   };
 
   transformControls.addEventListener('change', scheduleRender);
@@ -484,9 +599,15 @@ export function initializeThreeEditorOverlay(
     },
   );
 
-  options.viewerElement.addEventListener('pointerdown', handlePointerDown);
-  options.viewerElement.addEventListener('pointermove', handlePointerMove);
-  options.viewerElement.addEventListener('pointerleave', handlePointerLeave);
+  options.viewerElement.addEventListener('pointerdown', handleViewerPointerDown);
+  options.viewerElement.addEventListener('pointermove', handleViewerPointerMove);
+  options.viewerElement.addEventListener('pointerleave', handleViewerPointerLeave);
+  window.addEventListener('pointermove', handleGlobalPointerMove);
+  window.addEventListener('pointerup', handleGlobalPointerUp);
+  window.addEventListener('pointercancel', handleGlobalPointerCancel);
+  window.addEventListener('blur', handleWindowBlur);
+  window.addEventListener('keydown', handleWindowKeyDown);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   const resizeObserver = new ResizeObserver(() => {
     updateRendererSize();
@@ -580,9 +701,15 @@ export function initializeThreeEditorOverlay(
       unsubscribeRotationStep();
       unsubscribeScaleStep();
       resizeObserver.disconnect();
-      options.viewerElement.removeEventListener('pointerdown', handlePointerDown);
-      options.viewerElement.removeEventListener('pointermove', handlePointerMove);
-      options.viewerElement.removeEventListener('pointerleave', handlePointerLeave);
+      options.viewerElement.removeEventListener('pointerdown', handleViewerPointerDown);
+      options.viewerElement.removeEventListener('pointermove', handleViewerPointerMove);
+      options.viewerElement.removeEventListener('pointerleave', handleViewerPointerLeave);
+      window.removeEventListener('pointermove', handleGlobalPointerMove);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerCancel);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('keydown', handleWindowKeyDown);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       transformControls.dispose();
       sharedEdgesGeometry.dispose();
       sharedGeometry.dispose();

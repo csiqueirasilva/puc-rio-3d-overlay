@@ -59,6 +59,7 @@ interface FloatingEditorPosition {
 }
 
 type FloatingEditorMode = 'translate' | 'rotate' | 'scale';
+type SimpleEditorMode = 'position' | 'size';
 
 interface FloatingEditorDrafts {
   rotate: Record<AxisName, string>;
@@ -156,10 +157,6 @@ function parseBoxConfigArray(value: unknown): BoxConfig[] | null {
   return parsedBoxes;
 }
 
-function formatBoxSummary(box: BoxConfig): string {
-  return `${box.name} | lat ${box.position.lat.toFixed(6)} | lng ${box.position.lng.toFixed(6)} | alt ${box.position.altitude.toFixed(2)}`;
-}
-
 function formatStepValue(value: number, unit: string): string {
   return `${value.toFixed(value < 1 ? 2 : 1)} ${unit}`;
 }
@@ -193,8 +190,8 @@ function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   return Math.min(currentRange, targetRange);
 }
 
-const FLOATING_EDITOR_WIDTH = 340;
-const FLOATING_EDITOR_HEIGHT = 320;
+const FLOATING_EDITOR_WIDTH = 392;
+const FLOATING_EDITOR_HEIGHT = 420;
 const FLOATING_EDITOR_MARGIN = 14;
 
 function createFloatingEditorDrafts(box: BoxConfig): FloatingEditorDrafts {
@@ -294,6 +291,18 @@ function getTransformStepAdjustment(mode: FloatingEditorMode): number {
   return mode === 'rotate' ? 0.5 : 0.05;
 }
 
+function getQuickStepMode(
+  isAdvancedEditor: boolean,
+  transformMode: FloatingEditorMode,
+  simpleEditorMode: SimpleEditorMode,
+): FloatingEditorMode {
+  if (isAdvancedEditor) {
+    return transformMode;
+  }
+
+  return simpleEditorMode === 'position' ? 'translate' : 'scale';
+}
+
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -313,15 +322,10 @@ export default function App() {
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [interactionHint, setInteractionHint] = useState('');
-  const [isNameModalOpen, setIsNameModalOpen] = useState(false);
-  const [pendingBoxName, setPendingBoxName] = useState('');
   const [hoverTooltipPosition, setHoverTooltipPosition] = useState({
     x: 18,
     y: 18,
   });
-  const [cameraUrl, setCameraUrl] = useState(() =>
-    buildUrlWithNoCache(parseNoCacheFromUrl(), buildUrlWithCameraState(startupCameraState)),
-  );
   const [floatingEditorPosition, setFloatingEditorPosition] =
     useState<FloatingEditorPosition | null>(null);
   const [floatingEditorDrafts, setFloatingEditorDrafts] =
@@ -330,6 +334,9 @@ export default function App() {
   const [isFloatingNameEditing, setIsFloatingNameEditing] = useState(false);
   const [quickStepDraft, setQuickStepDraft] = useState('');
   const [isQuickStepEditing, setIsQuickStepEditing] = useState(false);
+  const [isAdvancedEditor, setIsAdvancedEditor] = useState(false);
+  const [simpleEditorMode, setSimpleEditorMode] =
+    useState<SimpleEditorMode>('position');
   const boxes = useEditorStore((state) => state.boxes);
   const cameraLocked = useEditorStore((state) => state.cameraLocked);
   const contextMenuState = useEditorStore((state) => state.contextMenu);
@@ -378,16 +385,19 @@ export default function App() {
       sensitivity: 'base',
     }),
   );
+  const quickStepMode = getQuickStepMode(
+    isAdvancedEditor,
+    transformMode,
+    simpleEditorMode,
+  );
 
   const syncUrl = (
     cameraState: CameraState = cameraStateRef.current,
     nextNoCache: boolean = editorStore.getState().noCache,
-  ): string => {
+  ): void => {
     let nextUrl = buildUrlWithCameraState(cameraState);
     nextUrl = buildUrlWithNoCache(nextNoCache, nextUrl);
     window.history.replaceState(window.history.state, '', nextUrl);
-    setCameraUrl(nextUrl);
-    return nextUrl;
   };
 
   useEffect(() => {
@@ -500,13 +510,11 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedBox) {
-      setIsNameModalOpen(false);
       setFloatingEditorDrafts(null);
       setFloatingNameDraft('');
       setIsFloatingNameEditing(false);
       setQuickStepDraft('');
       setIsQuickStepEditing(false);
-      setPendingBoxName('');
       return;
     }
 
@@ -514,7 +522,6 @@ export default function App() {
     if (!isFloatingNameEditing) {
       setFloatingNameDraft(selectedBox.name);
     }
-    setPendingBoxName(selectedBox.name);
   }, [isFloatingNameEditing, selectedBox]);
 
   useEffect(() => {
@@ -524,7 +531,7 @@ export default function App() {
 
     setQuickStepDraft(
       formatTransformStepDraft(
-        transformMode,
+        quickStepMode,
         positionStep,
         rotationStep,
         scaleStep,
@@ -533,10 +540,10 @@ export default function App() {
   }, [
     isQuickStepEditing,
     positionStep,
+    quickStepMode,
     rotationStep,
     scaleStep,
     selectedBox,
-    transformMode,
   ]);
 
   useEffect(() => {
@@ -928,9 +935,9 @@ export default function App() {
 
   const adjustQuickStep = (direction: -1 | 1): void => {
     applyTransformStepValue(
-      transformMode,
-      getTransformStepValue(transformMode, positionStep, rotationStep, scaleStep) +
-        getTransformStepAdjustment(transformMode) * direction,
+      quickStepMode,
+      getTransformStepValue(quickStepMode, positionStep, rotationStep, scaleStep) +
+        getTransformStepAdjustment(quickStepMode) * direction,
     );
   };
 
@@ -938,7 +945,7 @@ export default function App() {
     setIsQuickStepEditing(false);
     setQuickStepDraft(
       formatTransformStepDraft(
-        transformMode,
+        quickStepMode,
         positionStep,
         rotationStep,
         scaleStep,
@@ -954,7 +961,7 @@ export default function App() {
       return;
     }
 
-    applyTransformStepValue(transformMode, nextValue);
+    applyTransformStepValue(quickStepMode, nextValue);
     setIsQuickStepEditing(false);
   };
 
@@ -964,15 +971,6 @@ export default function App() {
     }
 
     removeSpace(selectedBoxId);
-  };
-
-  const handleOpenNameModal = (): void => {
-    if (!selectedBox) {
-      return;
-    }
-
-    setPendingBoxName(selectedBox.name);
-    setIsNameModalOpen(true);
   };
 
   const handleOpenContextMenu = (
@@ -1009,20 +1007,6 @@ export default function App() {
 
     removeSpace(targetBoxId);
     closeContextMenu();
-  };
-
-  const handleSaveBoxName = (): void => {
-    const nextName = pendingBoxName.trim();
-
-    if (!selectedBox || !nextName) {
-      return;
-    }
-
-    updateSelectedBox((box) => {
-      box.name = nextName;
-      return box;
-    });
-    setIsNameModalOpen(false);
   };
 
   const handleExportLayout = (): void => {
@@ -1101,6 +1085,52 @@ export default function App() {
       y: event.clientY - bounds.top + 14,
     });
   };
+
+  const renderFloatingAxisRow = (
+    label: string,
+    value: string,
+    onAdjust: (direction: -1 | 1) => void,
+    onChange: (rawValue: string) => void,
+    onCommit: () => void,
+    onReset: () => void,
+  ) => (
+    <div className="floatingAxisRow" key={label}>
+      <span>{label}</span>
+      <button aria-label={`${label} negativo`} onClick={() => onAdjust(-1)} type="button">
+        -
+      </button>
+      <input
+        inputMode="decimal"
+        onBlur={onReset}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            onCommit();
+          }
+
+          if (event.key === 'Escape') {
+            onReset();
+          }
+        }}
+        type="text"
+        value={value}
+      />
+      <button aria-label={`${label} positivo`} onClick={() => onAdjust(1)} type="button">
+        +
+      </button>
+    </div>
+  );
+
+  const quickStepValue = getTransformStepValue(
+    quickStepMode,
+    positionStep,
+    rotationStep,
+    scaleStep,
+  );
+  const quickStepUnit = quickStepMode === 'rotate' ? 'deg' : 'm';
+  const selectedArea = selectedBox
+    ? (selectedBox.scale.x * selectedBox.scale.y).toFixed(2)
+    : '0.00';
   return (
     <div className="layout">
       <aside className="panel">
@@ -1110,9 +1140,9 @@ export default function App() {
           contexto e escolher <strong>Adicionar espaço</strong>. Depois, use{' '}
           <strong>clique esquerdo</strong> para posicionar o espaço. Quando um
           espaço estiver selecionado pelo mapa, abre um menu flutuante perto do
-          clique com abas de <strong>Translação</strong>,{' '}
-          <strong>Rotação</strong> e <strong>Escala</strong>. As ações usam os
-          passos configurados abaixo e continuam disponíveis também no painel.
+          clique para editar. No modo básico, o editor mostra só{' '}
+          <strong>Posição</strong> e <strong>Tamanho</strong>; no modo{' '}
+          <strong>Avançado</strong>, ele separa translação, rotação e escala.
         </p>
 
         <div className="section">
@@ -1131,15 +1161,6 @@ export default function App() {
               type="checkbox"
             />
             No cache no próximo reload
-          </label>
-          <label className="row">
-            <input
-              checked={followCameraWithBox}
-              disabled={!selectedBox}
-              onChange={(event) => setFollowCameraWithBox(event.target.checked)}
-              type="checkbox"
-            />
-            Acompanhar câmera com o espaço
           </label>
         </div>
 
@@ -1205,148 +1226,6 @@ export default function App() {
               Limpar
             </button>
           </div>
-        </div>
-
-        <div className="section">
-          <p className="sectionTitle">Passos do editor</p>
-          <div className="stepSelectorGrid">
-            <label className="sliderControl">
-              <span>Posição</span>
-              <strong>{formatStepValue(positionStep, 'm')}</strong>
-              <input
-                max="10"
-                min="0.05"
-                onChange={(event) => setPositionStep(Number(event.target.value))}
-                step="0.05"
-                type="range"
-                value={positionStep}
-              />
-            </label>
-            <label className="sliderControl">
-              <span>Rotação</span>
-              <strong>{formatStepValue(rotationStep, 'deg')}</strong>
-              <input
-                max="45"
-                min="0.5"
-                onChange={(event) => setRotationStep(Number(event.target.value))}
-                step="0.5"
-                type="range"
-                value={rotationStep}
-              />
-            </label>
-            <label className="sliderControl">
-              <span>Escala</span>
-              <strong>{formatStepValue(scaleStep, 'm')}</strong>
-              <input
-                max="10"
-                min="0.05"
-                onChange={(event) => setScaleStep(Number(event.target.value))}
-                step="0.05"
-                type="range"
-                value={scaleStep}
-              />
-            </label>
-          </div>
-        </div>
-
-        {selectedBox ? (
-          <div className="section">
-            <div className="inlineActions">
-              <p className="sectionTitle">Editar {selectedBox.name}</p>
-              <button onClick={handleOpenNameModal} type="button">
-                Editar nome
-              </button>
-            </div>
-            <p className="small">
-              As transformações agora ficam no menu flutuante sobre o mapa.
-              Ele replica posição, rotação e escala com abas e campos
-              numéricos por eixo.
-            </p>
-
-            <div className="metricList small">
-              <p>
-                Lat: {selectedBox.position.lat.toFixed(7)}
-                <br />
-                Lng: {selectedBox.position.lng.toFixed(7)}
-                <br />
-                Alt: {selectedBox.position.altitude.toFixed(2)}
-              </p>
-            </div>
-          </div>
-        ) : hoveredBox ? (
-          <div className="section roomState">
-            <p className="sectionTitle">Hover</p>
-            <p>{formatBoxSummary(hoveredBox)}</p>
-            <p>
-              Id: {hoveredBox.id}
-              <br />
-              Rotação: {hoveredBox.rotation.x.toFixed(1)} /{' '}
-              {hoveredBox.rotation.y.toFixed(1)} /{' '}
-              {hoveredBox.rotation.z.toFixed(1)}
-              <br />
-              Escala: {hoveredBox.scale.x.toFixed(2)} x{' '}
-              {hoveredBox.scale.y.toFixed(2)} x{' '}
-              {hoveredBox.scale.z.toFixed(2)}
-            </p>
-          </div>
-        ) : (
-          <div className="section roomState">
-            <p className="sectionTitle">Editor</p>
-            <p>Selecione um espaço para editar ou passe o mouse por um espaço para inspecionar.</p>
-          </div>
-        )}
-
-        <div className="section small">
-          <p>
-            <strong>Startup atual</strong>
-            <br />
-            Centro: {defaultCameraState.center.lat.toFixed(7)},{' '}
-            {defaultCameraState.center.lng.toFixed(7)}
-            <br />
-            Altitude: {defaultCameraState.center.altitude.toFixed(2)}
-            <br />
-            Heading: {defaultCameraState.heading.toFixed(2)}
-            <br />
-            Tilt: {defaultCameraState.tilt.toFixed(2)}
-            <br />
-            Range: {defaultCameraState.range.toFixed(2)}
-            <br />
-            FOV: {defaultCameraState.fov.toFixed(2)}
-          </p>
-          <p>
-            Zoom com roda do mouse: use <code>Ctrl</code> + scroll.
-          </p>
-        </div>
-
-        <div className="section small">
-          <p>
-            <strong>URL da câmera</strong>
-          </p>
-          <textarea
-            className="urlField"
-            onFocus={(event) => event.currentTarget.select()}
-            readOnly
-            rows={4}
-            value={cameraUrl}
-          />
-        </div>
-
-        <div className="section small roomState">
-          <p>
-            <strong>Espaços</strong>
-            <br />
-            {boxes.length} espaço(s)
-          </p>
-          <p>
-            <strong>Selecionada</strong>
-            <br />
-            {selectedBox ? selectedBox.name : 'Nenhuma'}
-          </p>
-          <p>
-            <strong>Hover</strong>
-            <br />
-            {hoveredBox ? hoveredBox.name : 'Nenhuma'}
-          </p>
         </div>
 
         {sceneStatus !== 'ready' ? (
@@ -1463,113 +1342,200 @@ export default function App() {
                   </button>
                 )}
               </div>
-              <div className="floatingHeaderScale">
-                <button onClick={() => adjustQuickStep(-1)} type="button">
-                  -
-                </button>
-                {isQuickStepEditing ? (
-                  <input
-                    autoFocus
-                    inputMode="decimal"
-                    onBlur={cancelQuickStepEdit}
-                    onChange={(event) => setQuickStepDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        commitQuickStepEdit();
-                      }
-
-                      if (event.key === 'Escape') {
-                        cancelQuickStepEdit();
-                      }
-                    }}
-                    type="text"
-                    value={quickStepDraft}
-                  />
-                ) : (
-                  <button
-                    className="floatingScaleValue"
-                    onClick={() => setIsQuickStepEditing(true)}
-                    type="button"
-                  >
-                    {formatStepValue(
-                      getTransformStepValue(
-                        transformMode,
-                        positionStep,
-                        rotationStep,
-                        scaleStep,
-                      ),
-                      transformMode === 'rotate' ? 'deg' : 'm',
-                    )}
-                  </button>
-                )}
-                <button onClick={() => adjustQuickStep(1)} type="button">
-                  +
-                </button>
-              </div>
-            </div>
-            <div className="floatingEditorTabs modeToggle">
-              {([
-                ['translate', 'Translação'],
-                ['rotate', 'Rotação'],
-                ['scale', 'Escala'],
-              ] as const).map(([mode, label]) => (
+              <div className="floatingHeaderActions">
                 <button
-                  className={mode === transformMode ? 'isActive' : ''}
-                  key={mode}
-                  onClick={() => setTransformMode(mode)}
+                  aria-label="Acompanhar câmera com o espaço"
+                  className={`iconToggleButton ${followCameraWithBox ? 'isActive' : ''}`}
+                  onClick={() => setFollowCameraWithBox(!followCameraWithBox)}
+                  title={
+                    followCameraWithBox
+                      ? 'Destravar acompanhamento da câmera'
+                      : 'Travar acompanhamento da câmera'
+                  }
                   type="button"
                 >
-                  {label}
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <path d="M12 4a8 8 0 0 0-8 8h3a5 5 0 1 1 10 0h3a8 8 0 0 0-8-8Z" />
+                    <path d="M12 9a3 3 0 1 0 0 6a3 3 0 0 0 0-6Z" />
+                    <path d="M12 1v2M12 21v2M1 12h2M21 12h2" />
+                  </svg>
                 </button>
-              ))}
-            </div>
-            <div className="floatingAxisGrid">
-              {([
-                ['x', 'X'],
-                ['y', 'Y'],
-                ['z', 'Z'],
-              ] as const).map(([axis, label]) => (
-                <div className="floatingAxisRow" key={axis}>
-                  <span>{label}</span>
-                  <button
-                    aria-label={`${label} negativo`}
-                    onClick={() => handleFloatingTransformAction(axis, -1)}
-                    type="button"
-                  >
+                <button
+                  className={`floatingModeButton ${isAdvancedEditor ? 'isActive' : ''}`}
+                  onClick={() => setIsAdvancedEditor((current) => !current)}
+                  type="button"
+                >
+                  Avançado
+                </button>
+                <div className="floatingHeaderStep">
+                  <button onClick={() => adjustQuickStep(-1)} type="button">
                     -
                   </button>
-                  <input
-                    inputMode="decimal"
-                    onBlur={() => resetFloatingDraft(transformMode, axis)}
-                    onChange={(event) =>
-                      handleFloatingDraftChange(
-                        transformMode,
-                        axis,
-                        event.target.value,
-                      )
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        commitFloatingDraft(transformMode, axis);
-                      }
+                  {isQuickStepEditing ? (
+                    <input
+                      autoFocus
+                      inputMode="decimal"
+                      onBlur={cancelQuickStepEdit}
+                      onChange={(event) => setQuickStepDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          commitQuickStepEdit();
+                        }
 
-                      if (event.key === 'Escape') {
-                        resetFloatingDraft(transformMode, axis);
-                      }
-                    }}
-                    type="text"
-                    value={floatingEditorDrafts[transformMode][axis]}
-                  />
-                  <button
-                    aria-label={`${label} positivo`}
-                    onClick={() => handleFloatingTransformAction(axis, 1)}
-                    type="button"
-                  >
+                        if (event.key === 'Escape') {
+                          cancelQuickStepEdit();
+                        }
+                      }}
+                      type="text"
+                      value={quickStepDraft}
+                    />
+                  ) : (
+                    <button
+                      className="floatingStepValue"
+                      onClick={() => setIsQuickStepEditing(true)}
+                      type="button"
+                    >
+                      {formatStepValue(quickStepValue, quickStepUnit)}
+                    </button>
+                  )}
+                  <button onClick={() => adjustQuickStep(1)} type="button">
                     +
                   </button>
                 </div>
-              ))}
+              </div>
             </div>
+            {isAdvancedEditor ? (
+              <>
+                <div className="floatingEditorTabs modeToggle modeToggleAdvanced">
+                  {([
+                    ['translate', 'Translação'],
+                    ['rotate', 'Rotação'],
+                    ['scale', 'Escala'],
+                  ] as const).map(([mode, label]) => (
+                    <button
+                      className={mode === transformMode ? 'isActive' : ''}
+                      key={mode}
+                      onClick={() => setTransformMode(mode)}
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="floatingAxisGrid">
+                  {([
+                    ['x', 'X'],
+                    ['y', 'Y'],
+                    ['z', 'Z'],
+                  ] as const).map(([axis, label]) =>
+                    renderFloatingAxisRow(
+                      label,
+                      floatingEditorDrafts[transformMode][axis],
+                      (direction) => handleFloatingTransformAction(axis, direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange(transformMode, axis, rawValue),
+                      () => commitFloatingDraft(transformMode, axis),
+                      () => resetFloatingDraft(transformMode, axis),
+                    ),
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="floatingEditorTabs modeToggle modeToggleSimple">
+                  {([
+                    ['position', 'Posição'],
+                    ['size', 'Tamanho'],
+                  ] as const).map(([mode, label]) => (
+                    <button
+                      className={mode === simpleEditorMode ? 'isActive' : ''}
+                      key={mode}
+                      onClick={() => setSimpleEditorMode(mode)}
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {simpleEditorMode === 'position' ? (
+                  <div className="floatingAxisGrid">
+                    {renderFloatingAxisRow(
+                      'X',
+                      floatingEditorDrafts.translate.x,
+                      (direction) => adjustSelectedPosition('x', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('translate', 'x', rawValue),
+                      () => commitFloatingDraft('translate', 'x'),
+                      () => resetFloatingDraft('translate', 'x'),
+                    )}
+                    {renderFloatingAxisRow(
+                      'Y',
+                      floatingEditorDrafts.translate.y,
+                      (direction) => adjustSelectedPosition('y', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('translate', 'y', rawValue),
+                      () => commitFloatingDraft('translate', 'y'),
+                      () => resetFloatingDraft('translate', 'y'),
+                    )}
+                    {renderFloatingAxisRow(
+                      'Z',
+                      floatingEditorDrafts.translate.z,
+                      (direction) => adjustSelectedPosition('z', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('translate', 'z', rawValue),
+                      () => commitFloatingDraft('translate', 'z'),
+                      () => resetFloatingDraft('translate', 'z'),
+                    )}
+                    {renderFloatingAxisRow(
+                      'Rotação',
+                      floatingEditorDrafts.rotate.z,
+                      (direction) => adjustSelectedRotation('z', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('rotate', 'z', rawValue),
+                      () => commitFloatingDraft('rotate', 'z'),
+                      () => resetFloatingDraft('rotate', 'z'),
+                    )}
+                    <p className="floatingMetaText">
+                      Passo de rotação: {formatStepValue(rotationStep, 'deg')}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="floatingAxisGrid">
+                    {renderFloatingAxisRow(
+                      'Pé direito',
+                      floatingEditorDrafts.scale.z,
+                      (direction) => adjustSelectedScale('z', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('scale', 'z', rawValue),
+                      () => commitFloatingDraft('scale', 'z'),
+                      () => resetFloatingDraft('scale', 'z'),
+                    )}
+                    {renderFloatingAxisRow(
+                      'Largura',
+                      floatingEditorDrafts.scale.x,
+                      (direction) => adjustSelectedScale('x', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('scale', 'x', rawValue),
+                      () => commitFloatingDraft('scale', 'x'),
+                      () => resetFloatingDraft('scale', 'x'),
+                    )}
+                    {renderFloatingAxisRow(
+                      'Profundidade',
+                      floatingEditorDrafts.scale.y,
+                      (direction) => adjustSelectedScale('y', direction),
+                      (rawValue) =>
+                        handleFloatingDraftChange('scale', 'y', rawValue),
+                      () => commitFloatingDraft('scale', 'y'),
+                      () => resetFloatingDraft('scale', 'y'),
+                    )}
+                    <div className="floatingMetricsCard">
+                      <span>Área</span>
+                      <strong>{selectedArea} m²</strong>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         ) : null}
         {contextMenuState ? (
@@ -1608,56 +1574,6 @@ export default function App() {
         ) : null}
         <div id="mapContainer" ref={containerRef} />
       </main>
-      {isNameModalOpen && selectedBox ? (
-        <div
-          className="modalBackdrop"
-          onClick={() => setIsNameModalOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="modalCard"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="edit-box-name-title"
-          >
-            <h2 id="edit-box-name-title">Editar nome do espaço</h2>
-            <p className="small">
-              Id interno: <code>{selectedBox.id}</code>
-            </p>
-            <label className="modalField">
-              Nome
-              <input
-                autoFocus
-                onChange={(event) => setPendingBoxName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    handleSaveBoxName();
-                  }
-
-                  if (event.key === 'Escape') {
-                    setIsNameModalOpen(false);
-                  }
-                }}
-                type="text"
-                value={pendingBoxName}
-              />
-            </label>
-            <div className="modalActions">
-              <button onClick={() => setIsNameModalOpen(false)} type="button">
-                Cancelar
-              </button>
-              <button
-                disabled={!pendingBoxName.trim()}
-                onClick={handleSaveBoxName}
-                type="button"
-              >
-                Salvar
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

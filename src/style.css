@@ -278,7 +278,7 @@ textarea {
 .floatingEditor {
   position: absolute;
   z-index: 29;
-  width: 340px;
+  width: 392px;
   padding: 10px;
   border-radius: 16px;
   background: rgba(15, 23, 42, 0.98);
@@ -288,7 +288,7 @@ textarea {
 
 .floatingEditorHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
@@ -324,22 +324,57 @@ textarea {
   color: #fde68a;
 }
 
-.floatingHeaderScale {
-  display: grid;
-  grid-template-columns: 36px minmax(72px, 96px) 36px;
+.floatingHeaderActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
   align-items: center;
 }
 
-.floatingHeaderScale input,
-.floatingScaleValue {
-  width: 100%;
+.floatingHeaderStep {
+  display: grid;
+  grid-template-columns: 34px minmax(86px, 104px) 34px;
+  gap: 6px;
+  align-items: center;
 }
 
-.floatingScaleValue {
+.floatingHeaderStep input,
+.floatingStepValue {
+  width: 100%;
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
   text-align: center;
   white-space: nowrap;
+}
+
+.floatingModeButton {
+  width: auto;
+  min-width: 88px;
+}
+
+.iconToggleButton {
+  width: 38px;
+  height: 38px;
+  padding: 8px;
+  display: grid;
+  place-items: center;
+}
+
+.iconToggleButton svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.iconToggleButton.isActive,
+.floatingModeButton.isActive {
+  border-color: rgba(250, 204, 21, 0.6);
+  background: rgba(250, 204, 21, 0.14);
+  color: #fde68a;
 }
 
 .floatingEditorTabs {
@@ -353,15 +388,16 @@ textarea {
 
 .floatingAxisRow {
   display: grid;
-  grid-template-columns: 28px 44px 1fr 44px;
+  grid-template-columns: 96px 44px 1fr 44px;
   gap: 8px;
   align-items: center;
 }
 
 .floatingAxisRow span {
-  text-align: center;
+  text-align: left;
   color: #fde68a;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .floatingAxisRow button {
@@ -372,6 +408,31 @@ textarea {
   min-width: 0;
   text-align: center;
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+.floatingMetaText {
+  margin: 2px 0 0;
+  color: #cbd5e1;
+  font-size: 0.84rem;
+}
+
+.floatingMetricsCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(7, 11, 18, 0.76);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.floatingMetricsCard span {
+  color: #cbd5e1;
+}
+
+.floatingMetricsCard strong {
+  color: #fde68a;
 }
 
 #mapContainer > gmp-map-3d {
@@ -452,8 +513,15 @@ textarea {
 
 .modeToggle {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
+}
+
+.modeToggleAdvanced {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.modeToggleSimple {
+  grid-template-columns: repeat(2, 1fr);
 }
 
 .modeToggle button {

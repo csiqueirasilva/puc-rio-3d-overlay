@@ -756,16 +756,40 @@ export default function App() {
     }, 1800);
   };
 
+  const stopFloatingEditorInteraction = (pointerId?: number): void => {
+    const interaction = floatingEditorInteractionRef.current;
+
+    if (!interaction) {
+      return;
+    }
+
+    if (
+      typeof pointerId === 'number' &&
+      interaction.pointerId !== pointerId
+    ) {
+      return;
+    }
+
+    floatingEditorInteractionRef.current = null;
+  };
+
   useEffect(() => {
-    const finishInteraction = (): void => {
-      floatingEditorInteractionRef.current = null;
+    const finishInteraction = (event?: PointerEvent): void => {
+      stopFloatingEditorInteraction(event?.pointerId);
+    };
+    const handleBlur = (): void => {
+      finishInteraction();
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
       const interaction = floatingEditorInteractionRef.current;
       const viewerElement = viewerShellRef.current;
 
-      if (!interaction || !viewerElement) {
+      if (
+        !interaction ||
+        !viewerElement ||
+        interaction.pointerId !== event.pointerId
+      ) {
         return;
       }
 
@@ -812,13 +836,13 @@ export default function App() {
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', finishInteraction);
     window.addEventListener('pointercancel', finishInteraction);
-    window.addEventListener('blur', finishInteraction);
+    window.addEventListener('blur', handleBlur);
 
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', finishInteraction);
       window.removeEventListener('pointercancel', finishInteraction);
-      window.removeEventListener('blur', finishInteraction);
+      window.removeEventListener('blur', handleBlur);
     };
   }, [floatingEditorSize]);
 
@@ -1317,6 +1341,7 @@ export default function App() {
 
     event.preventDefault();
     event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
     floatingEditorInteractionRef.current = {
       mode: 'drag',
       originX: floatingEditorPosition.x,
@@ -1336,6 +1361,7 @@ export default function App() {
 
     event.preventDefault();
     event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
     floatingEditorInteractionRef.current = {
       mode: 'resize',
       originHeight: floatingEditorSize.height,
@@ -1576,7 +1602,14 @@ export default function App() {
               event.stopPropagation();
             }}
             onPointerDown={(event) => event.stopPropagation()}
-            onPointerUp={(event) => event.stopPropagation()}
+            onPointerUp={(event) => {
+              stopFloatingEditorInteraction(event.pointerId);
+              event.stopPropagation();
+            }}
+            onPointerCancel={(event) => {
+              stopFloatingEditorInteraction(event.pointerId);
+              event.stopPropagation();
+            }}
             ref={floatingEditorRef}
             style={{
               height: `${floatingEditorSize.height}px`,

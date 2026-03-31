@@ -18,6 +18,8 @@ import {
 import {
   cloneBoxConfig,
   cloneBoxesConfig,
+  createBoxId,
+  createBoxName,
   getBoxById,
   type BoxConfig,
 } from './config';
@@ -355,6 +357,7 @@ export default function App() {
   const transformMode = useEditorStore((state) => state.transformMode);
   const clearFocusRequest = useEditorStore((state) => state.clearFocusRequest);
   const closeContextMenu = useEditorStore((state) => state.closeContextMenu);
+  const addSpace = useEditorStore((state) => state.addSpace);
   const removeSpace = useEditorStore((state) => state.removeSpace);
   const selectSpace = useEditorStore((state) => state.selectSpace);
   const setBoxes = useEditorStore((state) => state.setBoxes);
@@ -1009,6 +1012,43 @@ export default function App() {
     closeContextMenu();
   };
 
+  const handleDuplicateContextTargetBox = (): void => {
+    const targetBoxId = contextMenuState?.targetSpaceId;
+
+    if (!targetBoxId) {
+      return;
+    }
+
+    const targetBox = getBoxById(targetBoxId, boxes);
+
+    if (!targetBox) {
+      return;
+    }
+
+    const nextBox = cloneBoxConfig(targetBox);
+    const localOffset = rotateLocalPoint(
+      {
+        x: Math.max(positionStep, 0.5),
+        y: 0,
+        z: 0,
+      },
+      targetBox.rotation,
+    );
+
+    nextBox.id = createBoxId();
+    nextBox.name = createBoxName(boxes);
+    nextBox.position = translatePosition(
+      targetBox.position,
+      localOffset.x,
+      localOffset.y,
+      localOffset.z,
+    );
+
+    addSpace(nextBox);
+    selectSpace(nextBox.id, 'system');
+    closeContextMenu();
+  };
+
   const handleExportLayout = (): void => {
     const snapshot: LayoutSnapshot = {
       boxes: sceneRef.current?.getBoxes() ?? cloneBoxesConfig(boxes),
@@ -1561,6 +1601,15 @@ export default function App() {
             >
               Adicionar espaço
             </button>
+            {contextMenuTargetBox ? (
+              <button
+                className="contextMenuItem"
+                onClick={handleDuplicateContextTargetBox}
+                type="button"
+              >
+                Duplicar {contextMenuTargetBox.name}
+              </button>
+            ) : null}
             {contextMenuTargetBox ? (
               <button
                 className="contextMenuItem danger"

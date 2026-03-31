@@ -243,9 +243,6 @@ export function initializeThreeEditorOverlay(
     } as unknown as TransformPointer;
   };
 
-  const isSceneSurfaceEventTarget = (target: EventTarget | null): boolean =>
-    target instanceof Node && container.contains(target);
-
   const pickBoxIdAtPointer = (): string | null => {
     const meshes = [...boxObjects.values()].map((meta) => meta.mesh);
 
@@ -462,10 +459,6 @@ export function initializeThreeEditorOverlay(
       return;
     }
 
-    if (!isSceneSurfaceEventTarget(event.target)) {
-      return;
-    }
-
     if (!updatePointerFromEvent(event)) {
       return;
     }
@@ -501,7 +494,7 @@ export function initializeThreeEditorOverlay(
       return;
     }
 
-    if (!isSceneSurfaceEventTarget(event.target) || !updatePointerFromEvent(event)) {
+    if (!updatePointerFromEvent(event)) {
       return;
     }
 

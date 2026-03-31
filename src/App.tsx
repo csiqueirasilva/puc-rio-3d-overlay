@@ -277,7 +277,6 @@ export default function App() {
   const cameraStateRef = useRef(defaultCameraState);
   const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
-  const previousTrackedBoxRef = useRef<BoxConfig | null>(null);
 
   const selectedBox = selectedBoxId ? getBoxById(selectedBoxId, boxes) : undefined;
   const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
@@ -501,31 +500,44 @@ export default function App() {
     cameraStateRef.current = nextCameraState;
     setDefaultCameraState(nextCameraState);
     sceneRef.current?.setCameraState(nextCameraState);
+    overlayRef.current?.setCameraState(nextCameraState);
     syncUrl(nextCameraState, editorStore.getState().noCache);
   };
 
   useEffect(() => {
-    if (!selectedBox) {
-      previousTrackedBoxRef.current = null;
-      return;
-    }
+    return editorStore.subscribe(
+      (state) => {
+        const selectedSpaceId = state.selectedSpaceId;
 
-    const previousTrackedBox = previousTrackedBoxRef.current;
+        if (!selectedSpaceId) {
+          return null;
+        }
 
-    if (!previousTrackedBox || previousTrackedBox.id !== selectedBox.id) {
-      previousTrackedBoxRef.current = cloneBoxConfig(selectedBox);
-      return;
-    }
+        const selectedSpace = getBoxById(selectedSpaceId, state.boxes);
 
-    if (
-      followCameraWithBox &&
-      didBoxTransformChange(previousTrackedBox, selectedBox)
-    ) {
-      syncTrackedCameraForBoxChange(previousTrackedBox, selectedBox);
-    }
+        return selectedSpace ? cloneBoxConfig(selectedSpace) : null;
+      },
+      (nextSelectedBox, previousSelectedBox) => {
+        if (
+          !nextSelectedBox ||
+          !previousSelectedBox ||
+          nextSelectedBox.id !== previousSelectedBox.id
+        ) {
+          return;
+        }
 
-    previousTrackedBoxRef.current = cloneBoxConfig(selectedBox);
-  }, [followCameraWithBox, selectedBox]);
+        if (!editorStore.getState().followCameraWithSpace) {
+          return;
+        }
+
+        if (!didBoxTransformChange(previousSelectedBox, nextSelectedBox)) {
+          return;
+        }
+
+        syncTrackedCameraForBoxChange(previousSelectedBox, nextSelectedBox);
+      },
+    );
+  }, []);
 
   const updateSelectedBox = (updater: (box: BoxConfig) => BoxConfig): void => {
     if (!selectedBoxId || !selectedBox) {

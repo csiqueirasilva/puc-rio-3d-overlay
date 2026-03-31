@@ -69,6 +69,11 @@ body {
   margin-bottom: 0;
 }
 
+.rowCompact {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
 label,
 .axisLabel,
 .small,
@@ -270,6 +275,19 @@ textarea {
   background: #020617;
 }
 
+.threeOverlayLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.threeOverlayCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 #mapContainer > gmp-map-3d {
   display: block;
 }
@@ -318,15 +336,58 @@ textarea {
   position: absolute;
   z-index: 32;
   min-width: 180px;
-  padding: 8px;
+  padding: 6px 0;
   border-radius: 14px;
   background: rgba(15, 23, 42, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
 }
 
+.contextMenuItem {
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.contextMenuItem:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.contextMenuItem.danger:hover {
+  background: rgba(239, 68, 68, 0.14);
+}
+
 .contextMenu button {
   text-align: left;
+}
+
+.modeToggle {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.modeToggle button {
+  background: rgba(7, 11, 18, 0.65);
+}
+
+.modeToggle button.isActive {
+  border-color: rgba(250, 204, 21, 0.6);
+  background: rgba(250, 204, 21, 0.14);
+  color: #fde68a;
+}
+
+.dimensionGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.dimensionGrid label {
+  display: grid;
+  gap: 6px;
 }
 
 .modalBackdrop {

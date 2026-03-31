@@ -5,6 +5,7 @@ import { cloneBoxConfig, cloneBoxesConfig, initialBoxes, type BoxConfig } from '
 
 export type PlacementMode = 'idle' | 'placing-space';
 export type SelectionSource = 'scene' | 'sidebar' | 'system';
+export type TransformMode = 'translate' | 'rotate' | 'scale';
 
 export interface ContextMenuState {
   targetSpaceId: string | null;
@@ -19,11 +20,20 @@ interface EditorState {
   followCameraWithSpace: boolean;
   focusRequestSpaceId: string | null;
   hoveredSpaceId: string | null;
+  nextMapClickBlocked: boolean;
   noCache: boolean;
   placementMode: PlacementMode;
+  positionStep: number;
+  rotationStep: number;
+  scaleStep: number;
   selectedSpaceId: string | null;
+  transformDragging: boolean;
+  transformMode: TransformMode;
+  transformSnapEnabled: boolean;
   addSpace: (box: BoxConfig) => void;
   armPlacementMode: () => void;
+  blockNextMapClick: () => void;
+  consumeNextMapClickBlock: () => boolean;
   clearFocusRequest: () => void;
   clearPlacementMode: () => void;
   closeContextMenu: () => void;
@@ -35,6 +45,12 @@ interface EditorState {
   setFollowCameraWithSpace: (enabled: boolean) => void;
   setHoveredSpaceId: (boxId: string | null) => void;
   setNoCache: (enabled: boolean) => void;
+  setPositionStep: (step: number) => void;
+  setRotationStep: (step: number) => void;
+  setScaleStep: (step: number) => void;
+  setTransformDragging: (enabled: boolean) => void;
+  setTransformMode: (mode: TransformMode) => void;
+  setTransformSnapEnabled: (enabled: boolean) => void;
   updateSpace: (
     boxId: string,
     updater: (box: BoxConfig) => BoxConfig,
@@ -56,14 +72,21 @@ function createInitialState() {
     followCameraWithSpace: false,
     focusRequestSpaceId: null,
     hoveredSpaceId: null,
+    nextMapClickBlocked: false,
     noCache: parseNoCacheFromUrl(),
     placementMode: 'idle' as PlacementMode,
+    positionStep: 1,
+    rotationStep: 5,
+    scaleStep: 1,
     selectedSpaceId: null,
+    transformDragging: false,
+    transformMode: 'translate' as TransformMode,
+    transformSnapEnabled: true,
   };
 }
 
 export const useEditorStore = create<EditorState>()(
-  subscribeWithSelector((set) => ({
+  subscribeWithSelector((set, get) => ({
     ...createInitialState(),
     addSpace: (box) =>
       set((state) => ({
@@ -74,6 +97,21 @@ export const useEditorStore = create<EditorState>()(
         contextMenu: null,
         placementMode: 'placing-space',
       })),
+    blockNextMapClick: () =>
+      set(() => ({
+        nextMapClickBlocked: true,
+      })),
+    consumeNextMapClickBlock: () => {
+      const blocked = get().nextMapClickBlocked;
+
+      if (blocked) {
+        set(() => ({
+          nextMapClickBlocked: false,
+        }));
+      }
+
+      return blocked;
+    },
     clearFocusRequest: () =>
       set(() => ({
         focusRequestSpaceId: null,
@@ -150,6 +188,30 @@ export const useEditorStore = create<EditorState>()(
     setNoCache: (enabled) =>
       set(() => ({
         noCache: enabled,
+      })),
+    setPositionStep: (step) =>
+      set(() => ({
+        positionStep: step,
+      })),
+    setRotationStep: (step) =>
+      set(() => ({
+        rotationStep: step,
+      })),
+    setScaleStep: (step) =>
+      set(() => ({
+        scaleStep: step,
+      })),
+    setTransformDragging: (enabled) =>
+      set(() => ({
+        transformDragging: enabled,
+      })),
+    setTransformMode: (mode) =>
+      set(() => ({
+        transformMode: mode,
+      })),
+    setTransformSnapEnabled: (enabled) =>
+      set(() => ({
+        transformSnapEnabled: enabled,
       })),
     updateSpace: (boxId, updater) =>
       set((state) => ({

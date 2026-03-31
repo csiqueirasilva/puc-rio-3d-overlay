@@ -37,6 +37,10 @@ import {
   type SceneController,
 } from './googleMapsScene';
 import { editorStore, useEditorStore } from './editorStore';
+import {
+  initializeThreeEditorOverlay,
+  type ThreeEditorOverlayController,
+} from './threeEditorOverlay';
 
 type SceneStatus = 'loading' | 'ready' | 'error';
 type AxisName = 'x' | 'y' | 'z';
@@ -178,6 +182,20 @@ function formatStepValue(value: number, unit: string): string {
   return `${value.toFixed(value < 1 ? 2 : 1)} ${unit}`;
 }
 
+function didBoxTransformChange(leftBox: BoxConfig, rightBox: BoxConfig): boolean {
+  return (
+    leftBox.position.lat !== rightBox.position.lat ||
+    leftBox.position.lng !== rightBox.position.lng ||
+    leftBox.position.altitude !== rightBox.position.altitude ||
+    leftBox.rotation.x !== rightBox.rotation.x ||
+    leftBox.rotation.y !== rightBox.rotation.y ||
+    leftBox.rotation.z !== rightBox.rotation.z ||
+    leftBox.scale.x !== rightBox.scale.x ||
+    leftBox.scale.y !== rightBox.scale.y ||
+    leftBox.scale.z !== rightBox.scale.z
+  );
+}
+
 function getSuggestedFocusRange(box: BoxConfig, currentRange: number): number {
   const largestDimension = Math.max(box.scale.x, box.scale.y, box.scale.z);
   const targetRange = Math.min(
@@ -197,14 +215,13 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const overlayContainerRef = useRef<HTMLDivElement | null>(null);
   const viewerShellRef = useRef<HTMLElement | null>(null);
   const sceneRef = useRef<SceneController | null>(null);
+  const overlayRef = useRef<ThreeEditorOverlayController | null>(null);
   const startupCameraState = parseCameraStateFromUrl() ?? getDefaultCameraState();
   const [defaultCameraState, setDefaultCameraState] =
     useState<CameraState>(startupCameraState);
-  const [positionStep, setPositionStep] = useState(1);
-  const [rotationStep, setRotationStep] = useState(5);
-  const [scaleStep, setScaleStep] = useState(1);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
   const [interactionHint, setInteractionHint] = useState('');
@@ -228,7 +245,14 @@ export default function App() {
     useEditorStore((state) => state.placementMode) === 'placing-space';
   const noCache = useEditorStore((state) => state.noCache);
   const pendingFocusBoxId = useEditorStore((state) => state.focusRequestSpaceId);
+  const positionStep = useEditorStore((state) => state.positionStep);
+  const rotationStep = useEditorStore((state) => state.rotationStep);
+  const scaleStep = useEditorStore((state) => state.scaleStep);
   const selectedBoxId = useEditorStore((state) => state.selectedSpaceId);
+  const transformMode = useEditorStore((state) => state.transformMode);
+  const transformSnapEnabled = useEditorStore(
+    (state) => state.transformSnapEnabled,
+  );
   const clearFocusRequest = useEditorStore((state) => state.clearFocusRequest);
   const closeContextMenu = useEditorStore((state) => state.closeContextMenu);
   const removeSpace = useEditorStore((state) => state.removeSpace);
@@ -240,12 +264,20 @@ export default function App() {
   );
   const setHoveredBoxId = useEditorStore((state) => state.setHoveredSpaceId);
   const setNoCache = useEditorStore((state) => state.setNoCache);
+  const setPositionStep = useEditorStore((state) => state.setPositionStep);
+  const setRotationStep = useEditorStore((state) => state.setRotationStep);
+  const setScaleStep = useEditorStore((state) => state.setScaleStep);
+  const setTransformMode = useEditorStore((state) => state.setTransformMode);
+  const setTransformSnapEnabled = useEditorStore(
+    (state) => state.setTransformSnapEnabled,
+  );
   const updateSpace = useEditorStore((state) => state.updateSpace);
   const armPlacementMode = useEditorStore((state) => state.armPlacementMode);
   const openContextMenu = useEditorStore((state) => state.openContextMenu);
   const cameraStateRef = useRef(defaultCameraState);
   const hintTimeoutRef = useRef<number | null>(null);
   const cameraUrlFrameRef = useRef<number | null>(null);
+  const previousTrackedBoxRef = useRef<BoxConfig | null>(null);
 
   const selectedBox = selectedBoxId ? getBoxById(selectedBoxId, boxes) : undefined;
   const hoveredBox = hoveredBoxId ? getBoxById(hoveredBoxId, boxes) : undefined;
@@ -285,13 +317,16 @@ export default function App() {
 
   useEffect(() => {
     const container = containerRef.current;
+    const overlayContainer = overlayContainerRef.current;
+    const viewerElement = viewerShellRef.current;
 
-    if (!container) {
+    if (!container || !overlayContainer || !viewerElement) {
       return;
     }
 
     let active = true;
     let controller: SceneController | null = null;
+    let overlayController: ThreeEditorOverlayController | null = null;
 
     const loadScene = async () => {
       try {
@@ -302,6 +337,7 @@ export default function App() {
           initialCameraState: defaultCameraState,
           onCameraStateChange: (cameraState) => {
             cameraStateRef.current = cameraState;
+            overlayRef.current?.setCameraState(cameraState);
 
             if (cameraUrlFrameRef.current !== null) {
               window.cancelAnimationFrame(cameraUrlFrameRef.current);
@@ -314,14 +350,24 @@ export default function App() {
           },
         });
 
+        overlayController = initializeThreeEditorOverlay(overlayContainer, {
+          initialCameraState: defaultCameraState,
+          viewerElement,
+        });
+
         if (!active) {
           controller.destroy();
+          overlayController.destroy();
           return;
         }
 
         sceneRef.current = controller;
+        overlayRef.current = overlayController;
         setSceneStatus('ready');
       } catch (error) {
+        controller?.destroy();
+        overlayController?.destroy();
+
         if (!active) {
           return;
         }
@@ -340,9 +386,14 @@ export default function App() {
     return () => {
       active = false;
       controller?.destroy();
+      overlayController?.destroy();
 
       if (sceneRef.current === controller) {
         sceneRef.current = null;
+      }
+
+      if (overlayRef.current === overlayController) {
+        overlayRef.current = null;
       }
     };
   }, []);
@@ -395,6 +446,7 @@ export default function App() {
 
   useEffect(() => {
     sceneRef.current?.setCameraState(defaultCameraState);
+    overlayRef.current?.setCameraState(defaultCameraState);
   }, [defaultCameraState]);
 
   const showHint = (message: string): void => {
@@ -452,18 +504,36 @@ export default function App() {
     syncUrl(nextCameraState, editorStore.getState().noCache);
   };
 
+  useEffect(() => {
+    if (!selectedBox) {
+      previousTrackedBoxRef.current = null;
+      return;
+    }
+
+    const previousTrackedBox = previousTrackedBoxRef.current;
+
+    if (!previousTrackedBox || previousTrackedBox.id !== selectedBox.id) {
+      previousTrackedBoxRef.current = cloneBoxConfig(selectedBox);
+      return;
+    }
+
+    if (
+      followCameraWithBox &&
+      didBoxTransformChange(previousTrackedBox, selectedBox)
+    ) {
+      syncTrackedCameraForBoxChange(previousTrackedBox, selectedBox);
+    }
+
+    previousTrackedBoxRef.current = cloneBoxConfig(selectedBox);
+  }, [followCameraWithBox, selectedBox]);
+
   const updateSelectedBox = (updater: (box: BoxConfig) => BoxConfig): void => {
     if (!selectedBoxId || !selectedBox) {
       return;
     }
 
-    const currentBox = cloneBoxConfig(selectedBox);
     const nextBox = updater(cloneBoxConfig(selectedBox));
     updateSpace(selectedBoxId, () => nextBox);
-
-    if (followCameraWithBox) {
-      syncTrackedCameraForBoxChange(currentBox, nextBox);
-    }
   };
 
   const adjustSelectedPosition = (
@@ -514,6 +584,25 @@ export default function App() {
       box.scale = {
         ...box.scale,
         [axis]: clampScaleValue(box.scale[axis] + scaleStep * direction),
+      };
+      return box;
+    });
+  };
+
+  const handleSelectedScaleFieldChange = (
+    axis: AxisName,
+    rawValue: string,
+  ): void => {
+    const nextValue = Number(rawValue);
+
+    if (!Number.isFinite(nextValue)) {
+      return;
+    }
+
+    updateSelectedBox((box) => {
+      box.scale = {
+        ...box.scale,
+        [axis]: clampScaleValue(nextValue),
       };
       return box;
     });
@@ -670,8 +759,9 @@ export default function App() {
         <p className="muted">
           Use <strong>clique direito</strong> no mapa para abrir o menu de
           contexto e escolher <strong>Adicionar espaço</strong>. Depois, use{' '}
-          <strong>clique esquerdo</strong> para posicionar o espaço. Clique
-          esquerdo também continua selecionando espaços existentes.
+          <strong>clique esquerdo</strong> para posicionar o espaço. Quando um
+          espaço estiver selecionado, use o gizmo 3D para mover, rotacionar ou
+          escalar diretamente sobre o mapa.
         </p>
 
         <div className="section">
@@ -806,22 +896,50 @@ export default function App() {
               />
             </label>
           </div>
+          <label className="row rowCompact">
+            <input
+              checked={transformSnapEnabled}
+              onChange={(event) => setTransformSnapEnabled(event.target.checked)}
+              type="checkbox"
+            />
+            Snap do gizmo usando os passos acima
+          </label>
         </div>
 
         {selectedBox ? (
           <div className="section">
             <div className="inlineActions">
-            <p className="sectionTitle">Editar {selectedBox.name}</p>
-            <button onClick={handleOpenNameModal} type="button">
-              Editar nome
-            </button>
+              <p className="sectionTitle">Editar {selectedBox.name}</p>
+              <button onClick={handleOpenNameModal} type="button">
+                Editar nome
+              </button>
             </div>
             <p className="small">
               Translação local do espaço: <code>X</code>, <code>Y</code> e{' '}
               <code>Z</code> seguem a rotação atual do próprio objeto. Os
-              botões usam o passo em metros; a leitura abaixo continua
-              geográfica.
+              botões usam o passo em metros; o gizmo 3D também usa esse snap
+              quando ativado.
             </p>
+
+            <div className="editorGroup">
+              <p className="groupLabel">Gizmo 3D</p>
+              <div className="modeToggle">
+                {([
+                  ['translate', 'Mover'],
+                  ['rotate', 'Rotacionar'],
+                  ['scale', 'Escalar'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    className={mode === transformMode ? 'isActive' : ''}
+                    key={mode}
+                    onClick={() => setTransformMode(mode)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="editorGroup">
               <p className="groupLabel">Posição</p>
@@ -887,6 +1005,48 @@ export default function App() {
                 onDecrement={() => adjustSelectedScale('z', -1)}
                 onIncrement={() => adjustSelectedScale('z', 1)}
               />
+            </div>
+
+            <div className="editorGroup">
+              <p className="groupLabel">Dimensões diretas</p>
+              <div className="dimensionGrid">
+                <label>
+                  Largura (X)
+                  <input
+                    min="0.5"
+                    onChange={(event) =>
+                      handleSelectedScaleFieldChange('x', event.target.value)
+                    }
+                    step="0.1"
+                    type="number"
+                    value={selectedBox.scale.x}
+                  />
+                </label>
+                <label>
+                  Profundidade (Y)
+                  <input
+                    min="0.5"
+                    onChange={(event) =>
+                      handleSelectedScaleFieldChange('y', event.target.value)
+                    }
+                    step="0.1"
+                    type="number"
+                    value={selectedBox.scale.y}
+                  />
+                </label>
+                <label>
+                  Altura (Z)
+                  <input
+                    min="0.5"
+                    onChange={(event) =>
+                      handleSelectedScaleFieldChange('z', event.target.value)
+                    }
+                    step="0.1"
+                    type="number"
+                    value={selectedBox.scale.z}
+                  />
+                </label>
+              </div>
             </div>
 
             <div className="metricList small">
@@ -1017,11 +1177,12 @@ export default function App() {
         }}
         ref={viewerShellRef}
       >
+        <div className="threeOverlayLayer" ref={overlayContainerRef} />
         {interactionHint ? <div className="hintBubble">{interactionHint}</div> : null}
         {isBoxPlacementArmed ? (
           <div className="placementBadge">Adicionar espaço: clique no mapa</div>
         ) : null}
-        {hoveredBox ? (
+        {!selectedBox && hoveredBox ? (
           <div
             className="hoverTooltip"
             style={{
@@ -1042,11 +1203,19 @@ export default function App() {
               top: `${contextMenuState.y}px`,
             }}
           >
-            <button onClick={handleArmBoxPlacement} type="button">
+            <button
+              className="contextMenuItem"
+              onClick={handleArmBoxPlacement}
+              type="button"
+            >
               Adicionar espaço
             </button>
             {contextMenuTargetBox ? (
-              <button onClick={handleRemoveContextTargetBox} type="button">
+              <button
+                className="contextMenuItem danger"
+                onClick={handleRemoveContextTargetBox}
+                type="button"
+              >
                 Remover {contextMenuTargetBox.name}
               </button>
             ) : null}

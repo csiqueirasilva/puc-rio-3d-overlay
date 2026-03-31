@@ -255,6 +255,10 @@ function formatBoxFieldValue(
   return value.toFixed(2);
 }
 
+function getAverageBoxScale(box: BoxConfig): number {
+  return (box.scale.x + box.scale.y + box.scale.z) / 3;
+}
+
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -287,6 +291,10 @@ export default function App() {
     useState<FloatingEditorPosition | null>(null);
   const [floatingEditorDrafts, setFloatingEditorDrafts] =
     useState<FloatingEditorDrafts | null>(null);
+  const [floatingNameDraft, setFloatingNameDraft] = useState('');
+  const [isFloatingNameEditing, setIsFloatingNameEditing] = useState(false);
+  const [quickScaleDraft, setQuickScaleDraft] = useState('');
+  const [isQuickScaleEditing, setIsQuickScaleEditing] = useState(false);
   const boxes = useEditorStore((state) => state.boxes);
   const cameraLocked = useEditorStore((state) => state.cameraLocked);
   const contextMenuState = useEditorStore((state) => state.contextMenu);
@@ -459,13 +467,23 @@ export default function App() {
     if (!selectedBox) {
       setIsNameModalOpen(false);
       setFloatingEditorDrafts(null);
+      setFloatingNameDraft('');
+      setIsFloatingNameEditing(false);
+      setQuickScaleDraft('');
+      setIsQuickScaleEditing(false);
       setPendingBoxName('');
       return;
     }
 
     setFloatingEditorDrafts(createFloatingEditorDrafts(selectedBox));
+    if (!isFloatingNameEditing) {
+      setFloatingNameDraft(selectedBox.name);
+    }
+    if (!isQuickScaleEditing) {
+      setQuickScaleDraft(getAverageBoxScale(selectedBox).toFixed(2));
+    }
     setPendingBoxName(selectedBox.name);
-  }, [selectedBox]);
+  }, [isFloatingNameEditing, isQuickScaleEditing, selectedBox]);
 
   useEffect(() => {
     const previousSelectedBoxId = previousSelectedBoxIdRef.current;
@@ -808,6 +826,85 @@ export default function App() {
     });
   };
 
+  const cancelFloatingNameEdit = (): void => {
+    setIsFloatingNameEditing(false);
+
+    if (selectedBox) {
+      setFloatingNameDraft(selectedBox.name);
+    }
+  };
+
+  const commitFloatingNameEdit = (): void => {
+    if (!selectedBox) {
+      return;
+    }
+
+    const nextName = floatingNameDraft.trim();
+
+    if (!nextName) {
+      cancelFloatingNameEdit();
+      return;
+    }
+
+    updateSelectedBox((box) => {
+      box.name = nextName;
+      return box;
+    });
+    setIsFloatingNameEditing(false);
+  };
+
+  const applyAverageScale = (targetAverageScale: number): void => {
+    updateSelectedBox((box) => {
+      const currentAverageScale = getAverageBoxScale(box);
+      const nextAverageScale = clampScaleValue(targetAverageScale);
+
+      if (currentAverageScale <= 0.0001) {
+        box.scale = {
+          x: nextAverageScale,
+          y: nextAverageScale,
+          z: nextAverageScale,
+        };
+        return box;
+      }
+
+      const scaleFactor = nextAverageScale / currentAverageScale;
+      box.scale = {
+        x: clampScaleValue(box.scale.x * scaleFactor),
+        y: clampScaleValue(box.scale.y * scaleFactor),
+        z: clampScaleValue(box.scale.z * scaleFactor),
+      };
+      return box;
+    });
+  };
+
+  const adjustQuickScale = (direction: -1 | 1): void => {
+    if (!selectedBox) {
+      return;
+    }
+
+    applyAverageScale(getAverageBoxScale(selectedBox) + scaleStep * direction);
+  };
+
+  const cancelQuickScaleEdit = (): void => {
+    setIsQuickScaleEditing(false);
+
+    if (selectedBox) {
+      setQuickScaleDraft(getAverageBoxScale(selectedBox).toFixed(2));
+    }
+  };
+
+  const commitQuickScaleEdit = (): void => {
+    const nextValue = Number(quickScaleDraft.trim());
+
+    if (!Number.isFinite(nextValue)) {
+      cancelQuickScaleEdit();
+      return;
+    }
+
+    applyAverageScale(nextValue);
+    setIsQuickScaleEditing(false);
+  };
+
   const handleDeleteSelectedBox = (): void => {
     if (!selectedBoxId) {
       return;
@@ -951,13 +1048,6 @@ export default function App() {
       y: event.clientY - bounds.top + 14,
     });
   };
-  const activeTransformStep =
-    transformMode === 'translate'
-      ? formatStepValue(positionStep, 'm')
-      : transformMode === 'rotate'
-        ? formatStepValue(rotationStep, 'deg')
-        : formatStepValue(scaleStep, 'm');
-
   return (
     <div className="layout">
       <aside className="panel">
@@ -1292,8 +1382,69 @@ export default function App() {
             }}
           >
             <div className="floatingEditorHeader">
-              <strong>{selectedBox.name}</strong>
-              <span>{activeTransformStep}</span>
+              <div className="floatingEditorName">
+                {isFloatingNameEditing ? (
+                  <input
+                    autoFocus
+                    onBlur={cancelFloatingNameEdit}
+                    onChange={(event) => setFloatingNameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        commitFloatingNameEdit();
+                      }
+
+                      if (event.key === 'Escape') {
+                        cancelFloatingNameEdit();
+                      }
+                    }}
+                    type="text"
+                    value={floatingNameDraft}
+                  />
+                ) : (
+                  <button
+                    className="floatingNameButton"
+                    onClick={() => setIsFloatingNameEditing(true)}
+                    type="button"
+                  >
+                    {selectedBox.name}
+                  </button>
+                )}
+              </div>
+              <div className="floatingHeaderScale">
+                <button onClick={() => adjustQuickScale(-1)} type="button">
+                  -
+                </button>
+                {isQuickScaleEditing ? (
+                  <input
+                    autoFocus
+                    inputMode="decimal"
+                    onBlur={cancelQuickScaleEdit}
+                    onChange={(event) => setQuickScaleDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        commitQuickScaleEdit();
+                      }
+
+                      if (event.key === 'Escape') {
+                        cancelQuickScaleEdit();
+                      }
+                    }}
+                    type="text"
+                    value={quickScaleDraft}
+                  />
+                ) : (
+                  <button
+                    className="floatingScaleValue"
+                    onClick={() => setIsQuickScaleEditing(true)}
+                    type="button"
+                  >
+                    {selectedBox ? getAverageBoxScale(selectedBox).toFixed(2) : '0.00'}
+                  </button>
+                )}
+                <button onClick={() => adjustQuickScale(1)} type="button">
+                  +
+                </button>
+              </div>
             </div>
             <div className="floatingEditorTabs modeToggle">
               {([

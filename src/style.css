@@ -301,9 +301,44 @@ textarea {
   white-space: nowrap;
 }
 
-.floatingEditorHeader span {
-  color: #fcd34d;
-  font-size: 0.84rem;
+.floatingEditorName {
+  min-width: 0;
+  flex: 1;
+}
+
+.floatingEditorName input,
+.floatingNameButton {
+  width: 100%;
+}
+
+.floatingNameButton {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-weight: 600;
+}
+
+.floatingNameButton:hover {
+  background: transparent;
+  color: #fde68a;
+}
+
+.floatingHeaderScale {
+  display: grid;
+  grid-template-columns: 36px minmax(72px, 96px) 36px;
+  gap: 6px;
+  align-items: center;
+}
+
+.floatingHeaderScale input,
+.floatingScaleValue {
+  width: 100%;
+}
+
+.floatingScaleValue {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  text-align: center;
   white-space: nowrap;
 }
 
